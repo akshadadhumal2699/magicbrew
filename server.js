@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
+const { MENU_VERSION, OWNER_NAME, buildMenu, applyMenu } = require('./menu-data');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'magicbrew123';
@@ -16,26 +17,13 @@ const UPLOADS = path.join(__dirname, 'uploads');
 
 // ---------- tiny JSON "database" ----------
 function seed() {
-  const cats = ['Sandwiches', 'Pasta', 'Burgers', 'Maggi', 'Fries', 'Sides'];
-  const items = [
-    ['Sandwiches', 'Veg Grilled Sandwich', 120], ['Sandwiches', 'Cheese Corn Sandwich', 140],
-    ['Pasta', 'White Sauce Pasta', 180], ['Pasta', 'Red Sauce Pasta', 170],
-    ['Burgers', 'Paneer Burger', 150], ['Burgers', 'Veg Burger', 110],
-    ['Maggi', 'Masala Maggi', 80], ['Maggi', 'Cheese Maggi', 100],
-    ['Fries', 'Peri Peri Fries', 130], ['Fries', 'Salted Fries', 100],
-    ['Sides', 'Garlic Bread', 110], ['Sides', 'Cold Coffee', 120],
-  ];
   return {
     settings: {
-      cafeName: 'Magic Brew Café & More', tagline: 'Brewed with magic',
+      cafeName: 'Magic Brew Café & More', tagline: 'Brewed with magic', ownerName: OWNER_NAME,
       ownerWhatsApp: '', upiId: '', upiName: 'Magic Brew Cafe',
       publicUrl: '', paymentQrImage: '', currency: '₹',
     },
-    categories: cats.map((name, i) => ({ id: 'c' + (i + 1), name, order: i })),
-    items: items.map(([cat, name, price], i) => ({
-      id: 'i' + (i + 1), categoryId: 'c' + (cats.indexOf(cat) + 1), name, price,
-      description: '', image: '', available: true,
-    })),
+    ...buildMenu(), menuVersion: MENU_VERSION,
     orders: [], nextOrderId: 1001,
   };
 }
@@ -61,10 +49,10 @@ async function loadDb() {
   if (REMOTE) {
     const raw = await redis(['GET', DB_KEY]);
     db = raw ? JSON.parse(raw) : seed();
-    if (!raw) { dirty = true; await persist(); }
+    if (!raw || applyMenu(db)) { dirty = true; await persist(); }
   } else if (!db) {
     const loaded = fs.existsSync(DATA_FILE) ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) : seed();
-    dirty = true; db = loaded; await persist();
+    db = loaded; applyMenu(db); dirty = true; await persist();
   }
 }
 async function persist() {
@@ -169,8 +157,8 @@ app.get('/api/menu-qr', async (req, res) => {
 
 // ---------- public API ----------
 const publicSettings = () => {
-  const { cafeName, tagline, currency, upiId, upiName, paymentQrImage } = db.settings;
-  return { cafeName, tagline, currency, hasUpi: !!upiId, upiName, paymentQrImage };
+  const { cafeName, tagline, ownerName, currency, upiId, upiName, paymentQrImage } = db.settings;
+  return { cafeName, tagline, ownerName, currency, hasUpi: !!upiId, upiName, paymentQrImage };
 };
 
 app.get('/api/menu', (req, res) => {
@@ -285,7 +273,7 @@ admin.use(auth);
 admin.get('/state', (req, res) => res.json({ ...db, orders: db.orders, sessionsOk: true, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID) }));
 
 admin.put('/settings', (req, res) => {
-  const allowed = ['cafeName', 'tagline', 'ownerWhatsApp', 'upiId', 'upiName', 'publicUrl', 'currency'];
+  const allowed = ['cafeName', 'tagline', 'ownerName', 'ownerWhatsApp', 'upiId', 'upiName', 'publicUrl', 'currency'];
   for (const k of allowed) if (k in req.body) db.settings[k] = String(req.body[k]).trim();
   save(); res.json(db.settings);
 });
