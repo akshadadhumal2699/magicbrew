@@ -225,7 +225,17 @@ function bindSettings(b) {
 }
 const bind = { orders: bindOrders, dashboard: bindOrders, payments: bindOrders, menu: bindMenu, categories: bindCategories, qr: bindQr, settings: bindSettings };
 
-refresh();
+(async () => {
+  const key = new URLSearchParams(location.search).get('key');
+  if (key) {
+    history.replaceState(null, '', location.pathname);   // don't leave the key in the address bar
+    try {
+      const r = await fetch('/api/admin/key-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
+      if (r.ok) { token = (await r.json()).token; sessionStorage.setItem('tok', token); }
+    } catch {}
+  }
+  refresh();
+})();
 // live order updates
 setInterval(() => { if (token && ['dashboard', 'orders', 'payments'].includes(tab)) refresh(true).catch(() => {}); }, 15000);
 </script></body></html>

@@ -128,6 +128,19 @@ function auth(req, res, next) {
   next();
 }
 
+// Private sign-in link for the owner: derived from the Redis token and printed only in the Vercel
+// runtime logs (visible to the project owner). Turn off with ADMIN_MAGIC_LINK=off.
+const MAGIC = REMOTE && process.env.ADMIN_MAGIC_LINK !== 'off'
+  ? crypto.createHmac('sha256', REDIS_TOKEN).update('admin-magic-link').digest('hex').slice(0, 40) : '';
+if (MAGIC && process.env.VERCEL) {
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  console.log('ADMIN SIGN-IN LINK: https://' + host + '/admin.html?key=' + MAGIC);
+}
+app.post('/api/admin/key-login', (req, res) => {
+  const a = Buffer.from(String(req.body.key || '')), b = Buffer.from(MAGIC);
+  if (!MAGIC || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Invalid link' });
+  res.json({ token: newToken() });
+});
 app.post('/api/admin/login', (req, res) => {
   if (process.env.VERCEL && !process.env.ADMIN_PASSWORD) return res.status(500).json({ error: 'Set the ADMIN_PASSWORD environment variable' });
   const a = Buffer.from(String(req.body.password || ''));
