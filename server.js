@@ -41,9 +41,11 @@ function seed() {
 }
 // Storage: on Vercel (no writable disk) data lives in Upstash Redis (REST) and photos in Vercel Blob.
 // Locally it falls back to data/db.json and uploads/.
-const REDIS_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '';
-const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || '';
-const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || '';
+// Vercel integrations may add a custom prefix (e.g. STORAGE_KV_REST_API_URL), so match by suffix.
+const envBy = (re) => { const k = Object.keys(process.env).find((n) => re.test(n) && process.env[n]); return k ? process.env[k] : ''; };
+const REDIS_URL = envBy(/(^|_)(KV_REST_API_URL|UPSTASH_REDIS_REST_URL)$/);
+const REDIS_TOKEN = envBy(/(^|_)(KV_REST_API_TOKEN|UPSTASH_REDIS_REST_TOKEN)$/);
+const BLOB_TOKEN = envBy(/(^|_)BLOB_READ_WRITE_TOKEN$/);
 const REMOTE = !!(REDIS_URL && REDIS_TOKEN);
 const DB_KEY = 'magicbrew:db';
 const redis = async (cmd) => {
@@ -55,13 +57,14 @@ const redis = async (cmd) => {
 
 let db = null, dirty = false;
 async function loadDb() {
+  if (process.env.VERCEL && !REMOTE) throw new Error('Database not connected: add Upstash Redis under Vercel > Storage and redeploy');
   if (REMOTE) {
     const raw = await redis(['GET', DB_KEY]);
     db = raw ? JSON.parse(raw) : seed();
     if (!raw) { dirty = true; await persist(); }
   } else if (!db) {
-    db = fs.existsSync(DATA_FILE) ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) : seed();
-    dirty = true; await persist();
+    const loaded = fs.existsSync(DATA_FILE) ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) : seed();
+    dirty = true; db = loaded; await persist();
   }
 }
 async function persist() {
@@ -89,7 +92,7 @@ app.use('/api', async (req, res, next) => {
     const json = res.json.bind(res);
     res.json = (body) => { persist().then(() => json(body), (e) => { console.error(e); res.status(500); json({ error: 'Could not save changes' }); }); return res; };
     next();
-  } catch (e) { console.error(e); res.status(500).json({ error: 'Storage unavailable' }); }
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Storage unavailable: ' + e.message }); }
 });
 
 const upload = multer({
@@ -141,6 +144,14 @@ app.get('/api/admin/local-login', (req, res) => res.json({ available: localLogin
 app.post('/api/admin/local-login', (req, res) => {
   if (!localLoginOn(req)) return res.status(403).json({ error: 'Not available' });
   res.json({ token: newToken() });
+});
+
+// Public QR code that opens the customer menu
+app.get('/api/menu-qr', async (req, res) => {
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  const local = /^(localhost|127\.|\[::1\]|\d+\.\d+\.\d+\.\d+)/.test(host);
+  const url = (db.settings.publicUrl || (local ? `http://${lanIp()}:${PORT}` : `https://${host}`)).replace(/\/$/, '') + '/';
+  res.json({ url, qr: await QRCode.toDataURL(url, { margin: 2, width: 720, errorCorrectionLevel: 'H' }), name: db.settings.cafeName });
 });
 
 // ---------- public API ----------
@@ -343,7 +354,7 @@ function lanIp() {
 }
 admin.get('/cafe-qr', async (req, res) => {
   const host = req.headers['x-forwarded-host'] || req.headers.host || '';
-  const local = /^(localhost|127.|[::1]|d+.d+.d+.d+)/.test(host);
+  const local = /^(localhost|127\.|\[::1\]|\d+\.\d+\.\d+\.\d+)/.test(host);
   const url = db.settings.publicUrl || (local ? `http://${lanIp()}:${PORT}` : `https://${host}`);
   res.json({ url, qr: await QRCode.toDataURL(url, { margin: 2, width: 600, errorCorrectionLevel: 'H' }), isLocal: !db.settings.publicUrl && local });
 });
