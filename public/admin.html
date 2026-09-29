@@ -1,0 +1,230 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Magic Brew · Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+body{padding-bottom:30px}
+.top{background:var(--brand2);color:var(--gold);padding:14px 16px;display:flex;justify-content:space-between;align-items:center}
+.nav{display:flex;gap:6px;overflow-x:auto;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.wrap{max-width:900px;margin:0 auto;padding:16px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:560px){.two{grid-template-columns:1fr}}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:#fff;border-radius:14px;padding:14px;box-shadow:0 2px 10px #5a34201a}.stat b{font-size:1.5rem;color:var(--brand);display:block}
+.sm{padding:6px 10px;font-size:.8rem;border-radius:8px;border:1px solid var(--brand);background:#fff;color:var(--brand);font-weight:600;cursor:pointer}
+.sm.fill{background:var(--brand);color:#fff}.sm.danger{color:var(--bad);border-color:var(--bad)}
+.thumb{width:56px;height:56px;border-radius:10px;background:#f1e4d0 center/cover;flex:none;display:flex;align-items:center;justify-content:center}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.new{border-left:4px solid var(--gold)}
+pre{white-space:pre-wrap;background:#f4e9d8;padding:10px;border-radius:10px;font-size:.8rem}
+</style></head><body>
+<div id="root"></div>
+<script>
+const R = document.getElementById('root');
+let token = sessionStorage.getItem('tok'), S = null, tab = 'dashboard', editing = null, toast = '';
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+async function api(url, opt = {}) {
+  opt.headers = { ...(opt.headers || {}), Authorization: 'Bearer ' + token };
+  if (opt.json) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(opt.json); }
+  const r = await fetch('/api/admin' + url, opt);
+  if (r.status === 401) { sessionStorage.removeItem('tok'); token = null; renderLogin(); throw new Error('Session expired'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(d.error || 'Error'); throw new Error(d.error); }
+  return d;
+}
+const cur = () => S.settings.currency;
+const catName = (id) => (S.categories.find((c) => c.id === id) || {}).name || '—';
+const fdate = (d) => new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function renderLogin(err = '') {
+  R.innerHTML = `<div class="page" style="margin-top:12vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad)">${esc(err)}</p>
+  <input id="pw" type="password" placeholder="Admin password" autocomplete="current-password" autofocus>
+  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="primary" id="login">Log in</button></div></div>`;
+  fetch('/api/admin/local-login').then((r) => r.json()).then((d) => {
+    if (!d.available) return;
+    const b = document.createElement('button');
+    b.className = 'ghost'; b.style.marginTop = '10px'; b.textContent = 'Continue as owner (this computer only)';
+    b.onclick = async () => { token = (await (await fetch('/api/admin/local-login', { method: 'POST' })).json()).token; sessionStorage.setItem('tok', token); refresh(); };
+    document.getElementById('login').after(b);
+  }).catch(() => {});
+  document.getElementById('showpw').onchange = (e) => (document.getElementById('pw').type = e.target.checked ? 'text' : 'password');
+  document.getElementById('pw').focus();
+  const doLogin = async () => {
+    const r = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value }) });
+    if (!r.ok) return renderLogin('Wrong password');
+    token = (await r.json()).token; sessionStorage.setItem('tok', token); refresh();
+  };
+  document.getElementById('login').onclick = doLogin;
+  document.getElementById('pw').onkeydown = (e) => e.key === 'Enter' && doLogin();
+}
+
+async function refresh(quiet) {
+  if (!token) return renderLogin();
+  S = await api('/state');
+  if (!quiet || !['menu', 'settings'].includes(tab) || !editing) draw();
+}
+
+const TABS = [['dashboard', 'Dashboard'], ['orders', 'Orders'], ['menu', 'Menu'], ['categories', 'Categories'], ['payments', 'Payments'], ['qr', 'Café QR'], ['settings', 'Settings']];
+function draw() {
+  const pend = S.orders.filter((o) => o.status === 'new').length;
+  R.innerHTML = `<div class="top"><b style="font-family:'Playfair Display'">${esc(S.settings.cafeName)} · Admin</b><button class="sm" id="logout">Log out</button></div>
+  <div class="nav">${TABS.map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}${k === 'orders' && pend ? ` (${pend})` : ''}</button>`).join('')}</div>
+  <div class="wrap" id="body"></div>`;
+  document.getElementById('logout').onclick = () => { sessionStorage.removeItem('tok'); token = null; renderLogin(); };
+  document.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; draw(); }));
+  const body = document.getElementById('body');
+  body.innerHTML = { dashboard, orders, menu, categories, payments, qr, settings }[tab]();
+  bind[tab] && bind[tab](body);
+}
+
+/* ---------- Dashboard ---------- */
+function dashboard() {
+  const today = S.orders.filter((o) => new Date(o.createdAt).toDateString() === new Date().toDateString() && o.status !== 'cancelled');
+  const paid = today.filter((o) => o.payment.status === 'paid');
+  return `<div class="stats"><div class="stat"><b>${today.length}</b>Orders today</div><div class="stat"><b>${cur()}${today.reduce((s, o) => s + o.total, 0)}</b>Order value</div>
+  <div class="stat"><b>${cur()}${paid.reduce((s, o) => s + o.total, 0)}</b>Paid (verified)</div><div class="stat"><b>${S.orders.filter((o) => o.status === 'new').length}</b>New orders</div></div>
+  ${!S.settings.ownerWhatsApp ? '<div class="panel err">⚠️ Set your WhatsApp number in Settings to receive order notifications.</div>' : ''}
+  ${!S.settings.upiId && !S.settings.paymentQrImage ? '<div class="panel err">⚠️ Add your UPI ID or payment QR in Settings so customers can pay.</div>' : ''}
+  <h3>Latest orders</h3>${S.orders.slice(0, 5).map(orderCard).join('') || '<p>No orders yet.</p>'}`;
+}
+
+/* ---------- Orders ---------- */
+const STAT = ['new', 'preparing', 'ready', 'completed', 'cancelled'];
+function orderCard(o) {
+  const pb = o.payment.status === 'paid' ? '<span class="badge ok">Paid ✓</span>' : o.payment.status === 'reported' ? '<span class="badge" style="background:#fff3cd">Customer says paid — verify</span>' : '<span class="badge">Unpaid</span>';
+  return `<div class="panel ${o.status === 'new' ? 'new' : ''}"><div class="row"><b>#${o.id} · ${esc(o.customer.name)}</b><span class="total">${cur()}${o.total}</span></div>
+  <small>${fdate(o.createdAt)} · ${esc(o.customer.mobile)}</small><div style="margin:6px 0">${o.items.map((i) => `${i.qty} × ${esc(i.name)}`).join(', ')}</div>
+  ${o.notes ? `<small>📝 ${esc(o.notes)}</small><br>` : ''}
+  <span class="badge">${o.status}</span> ${pb} ${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}
+  <div class="acts">${STAT.filter((s) => s !== o.status).map((s) => `<button class="sm" data-os="${o.id}" data-s="${s}">${s}</button>`).join('')}
+  ${o.payment.status !== 'paid' ? `<button class="sm fill" data-pay="${o.id}">Mark paid</button>` : ''}
+  <button class="sm" data-wa="${o.id}">WhatsApp</button></div></div>`;
+}
+function orders() { return `<h3>All orders</h3>${S.orders.map(orderCard).join('') || '<p>No orders yet.</p>'}`; }
+function bindOrders(b) {
+  b.querySelectorAll('[data-os]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.os, { method: 'PUT', json: { status: x.dataset.s } }); refresh(); }));
+  b.querySelectorAll('[data-pay]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.pay, { method: 'PUT', json: { paymentStatus: 'paid' } }); refresh(); }));
+  b.querySelectorAll('[data-wa]').forEach((x) => (x.onclick = async () => {
+    const l = await api(`/orders/${x.dataset.wa}/whatsapp`);
+    const o = S.orders.find((z) => z.id === +x.dataset.wa);
+    window.open(o.payment.status === 'unpaid' ? l.order : l.payment, '_blank');
+  }));
+}
+
+/* ---------- Menu ---------- */
+function itemForm(it) {
+  const n = !it.id;
+  return `<div class="panel" id="itemform"><h3>${n ? 'Add new item' : 'Edit item'}</h3>
+  <label>Name</label><input id="i-name" value="${esc(it.name || '')}">
+  <div class="two"><div><label>Price (${cur()})</label><input id="i-price" type="number" min="0" value="${it.price ?? ''}"></div>
+  <div><label>Category</label><select id="i-cat">${S.categories.map((c) => `<option value="${c.id}" ${c.id === it.categoryId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div></div>
+  <label>Description (optional)</label><input id="i-desc" value="${esc(it.description || '')}">
+  <label>Photo</label><input id="i-img" type="file" accept="image/*">
+  ${it.image ? `<label><input type="checkbox" id="i-rm" style="width:auto"> Remove current photo</label>` : ''}
+  <label><input type="checkbox" id="i-av" style="width:auto" ${it.available !== false ? 'checked' : ''}> Available</label>
+  <div class="acts"><button class="sm fill" id="i-save">Save</button><button class="sm" id="i-cancel">Cancel</button></div></div>`;
+}
+function menu() {
+  if (editing) return itemForm(editing === 'new' ? { categoryId: S.categories[0]?.id } : S.items.find((i) => i.id === editing));
+  return `<div class="row"><h3>Menu items</h3><button class="sm fill" id="add">+ Add item</button></div>
+  ${S.categories.map((c) => `<h4 style="color:var(--brand);margin:16px 0 6px">${esc(c.name)}</h4>${S.items.filter((i) => i.categoryId === c.id).map((i) => `
+  <div class="panel row" style="margin-bottom:8px"><div style="display:flex;gap:10px;align-items:center;min-width:0"><div class="thumb" ${i.image ? `style="background-image:url('${esc(i.image)}')"` : ''}>${i.image ? '' : '🍽️'}</div>
+  <div><b>${esc(i.name)}</b><br><span class="price">${cur()}${i.price}</span> ${i.available ? '' : '<span class="tag">Unavailable</span>'}</div></div>
+  <div class="acts" style="margin:0;justify-content:flex-end"><button class="sm" data-tg="${i.id}">${i.available ? 'Mark unavailable' : 'Mark available'}</button><button class="sm" data-ed="${i.id}">Edit</button><button class="sm danger" data-rm="${i.id}">Delete</button></div></div>`).join('') || '<small>No items</small>'}`).join('')}`;
+}
+function bindMenu(b) {
+  const add = b.querySelector('#add');
+  if (add) add.onclick = () => { if (!S.categories.length) return alert('Add a category first'); editing = 'new'; draw(); };
+  b.querySelectorAll('[data-ed]').forEach((x) => (x.onclick = () => { editing = x.dataset.ed; draw(); }));
+  b.querySelectorAll('[data-tg]').forEach((x) => (x.onclick = async () => { const it = S.items.find((i) => i.id === x.dataset.tg); await api('/items/' + it.id, { method: 'PUT', json: { available: !it.available } }); refresh(); }));
+  b.querySelectorAll('[data-rm]').forEach((x) => (x.onclick = async () => { if (x.dataset.armed) { await api('/items/' + x.dataset.rm, { method: 'DELETE' }); return refresh(); } x.dataset.armed = 1; x.textContent = 'Confirm delete?'; }));
+  const save = b.querySelector('#i-save');
+  if (save) {
+    b.querySelector('#i-cancel').onclick = () => { editing = null; draw(); };
+    save.onclick = async () => {
+      const fd = new FormData();
+      fd.append('name', b.querySelector('#i-name').value); fd.append('price', b.querySelector('#i-price').value);
+      fd.append('categoryId', b.querySelector('#i-cat').value); fd.append('description', b.querySelector('#i-desc').value);
+      fd.append('available', b.querySelector('#i-av').checked);
+      const f = b.querySelector('#i-img').files[0]; if (f) fd.append('image', f);
+      const rm = b.querySelector('#i-rm'); if (rm && rm.checked) fd.append('removeImage', 'true');
+      await api(editing === 'new' ? '/items' : '/items/' + editing, { method: editing === 'new' ? 'POST' : 'PUT', body: fd });
+      editing = null; refresh();
+    };
+  }
+}
+
+/* ---------- Categories ---------- */
+function categories() {
+  return `<h3>Categories</h3><div class="panel">${S.categories.sort((a, b) => a.order - b.order).map((c, i) => `<div class="line"><input value="${esc(c.name)}" data-cn="${c.id}" style="max-width:220px">
+  <span class="acts" style="margin:0"><button class="sm" data-up="${c.id}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="sm" data-dn="${c.id}" ${i === S.categories.length - 1 ? 'disabled' : ''}>↓</button>
+  <button class="sm" data-sv="${c.id}">Rename</button><button class="sm danger" data-dc="${c.id}">Delete</button></span></div>`).join('')}</div>
+  <div class="panel"><label>New category</label><div style="display:flex;gap:8px"><input id="nc" placeholder="e.g. Shakes"><button class="sm fill" id="ac">Add</button></div></div>`;
+}
+function bindCategories(b) {
+  b.querySelector('#ac').onclick = async () => { const v = b.querySelector('#nc').value; if (v.trim()) { await api('/categories', { method: 'POST', json: { name: v } }); refresh(); } };
+  b.querySelectorAll('[data-sv]').forEach((x) => (x.onclick = async () => { await api('/categories/' + x.dataset.sv, { method: 'PUT', json: { name: b.querySelector(`[data-cn="${x.dataset.sv}"]`).value } }); refresh(); }));
+  b.querySelectorAll('[data-dc]').forEach((x) => (x.onclick = async () => { if (confirm('Delete this category?')) { await api('/categories/' + x.dataset.dc, { method: 'DELETE' }); refresh(); } }));
+  const swap = async (id, dir) => {
+    const l = [...S.categories].sort((a, b) => a.order - b.order), i = l.findIndex((c) => c.id === id), j = i + dir;
+    if (j < 0 || j >= l.length) return;
+    [l[i], l[j]] = [l[j], l[i]];
+    await Promise.all(l.map((c, k) => api('/categories/' + c.id, { method: 'PUT', json: { order: k } })));
+    refresh();
+  };
+  b.querySelectorAll('[data-up]').forEach((x) => (x.onclick = () => swap(x.dataset.up, -1)));
+  b.querySelectorAll('[data-dn]').forEach((x) => (x.onclick = () => swap(x.dataset.dn, 1)));
+}
+
+/* ---------- Payments ---------- */
+function payments() {
+  const p = S.orders.filter((o) => o.payment.status !== 'unpaid');
+  const tot = S.orders.filter((o) => o.payment.status === 'paid').reduce((s, o) => s + o.total, 0);
+  return `<h3>Payments</h3><div class="stats"><div class="stat"><b>${cur()}${tot}</b>Verified total</div><div class="stat"><b>${S.orders.filter((o) => o.payment.status === 'reported').length}</b>Awaiting verification</div></div>
+  <p style="color:var(--muted);font-size:.85rem">UPI payments go straight to your account. Check your bank/UPI app, then tap “Mark paid” on the order to verify.</p>
+  ${p.map(orderCard).join('') || '<p>No payments yet.</p>'}`;
+}
+
+/* ---------- Café QR ---------- */
+let qrData = null;
+function qr() {
+  return `<h3>Café QR Code</h3><div class="panel center">${qrData ? `<img class="qrimg" src="${qrData.qr}"><p><b>${esc(qrData.url)}</b></p>
+  ${qrData.isLocal ? '<p class="err">This address only works on your Wi-Fi. Deploy the app online and enter its public URL in Settings, then print this QR.</p>' : ''}
+  <button class="sm fill" id="printqr">Print QR</button>` : 'Loading…'}</div>`;
+}
+function bindQr(b) {
+  api('/cafe-qr').then((d) => { const first = !qrData; qrData = d; if (first) draw(); });
+  const p = b.querySelector('#printqr');
+  if (p) p.onclick = () => { const w = window.open(''); w.document.write(`<body style="text-align:center;font-family:Georgia"><h1>${esc(S.settings.cafeName)}</h1><h2>Scan to view menu & order</h2><img src="${qrData.qr}" style="width:420px"><p>${esc(qrData.url)}</p></body>`); w.document.close(); w.print(); };
+}
+
+/* ---------- Settings ---------- */
+function settings() {
+  const s = S.settings;
+  return `<h3>Settings</h3><div class="panel"><label>Café name</label><input id="s-cafeName" value="${esc(s.cafeName)}"><label>Tagline</label><input id="s-tagline" value="${esc(s.tagline)}">
+  <label>Public menu URL (for the QR code, e.g. https://menu.magicbrew.in)</label><input id="s-publicUrl" value="${esc(s.publicUrl)}"></div>
+  <div class="panel"><b>WhatsApp notifications</b><label>Owner/chef WhatsApp number (with country code, e.g. 919876543210)</label><input id="s-ownerWhatsApp" value="${esc(s.ownerWhatsApp)}" inputmode="numeric">
+  <small style="color:var(--muted)">${S.whatsappApi ? '✅ WhatsApp Cloud API is configured — messages are sent automatically.' : 'Cloud API not configured: customers get a “Send on WhatsApp” button that opens a pre-filled message to this number. See README to enable fully automatic sending.'}</small></div>
+  <div class="panel"><b>Payment</b><label>UPI ID (e.g. magicbrew@okhdfc)</label><input id="s-upiId" value="${esc(s.upiId)}"><label>Payee name</label><input id="s-upiName" value="${esc(s.upiName)}">
+  <small style="color:var(--muted)">A QR with the exact bill amount is generated per order from your UPI ID.</small>
+  <label>Or upload your own bank/UPI QR image (overrides the generated QR)</label><input type="file" id="s-qr" accept="image/*">
+  ${s.paymentQrImage ? `<br><img src="${esc(s.paymentQrImage)}" style="width:120px;margin-top:8px"><br><button class="sm danger" id="rmqr">Remove uploaded QR</button>` : ''}</div>
+  <button class="primary" id="s-save">Save settings</button>`;
+}
+function bindSettings(b) {
+  b.querySelector('#s-save').onclick = async () => {
+    const json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerWhatsApp', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
+    await api('/settings', { method: 'PUT', json });
+    const f = b.querySelector('#s-qr').files[0];
+    if (f) { const fd = new FormData(); fd.append('image', f); await api('/settings/payment-qr', { method: 'POST', body: fd }); }
+    qrData = null; await refresh(); alert('Saved ✓');
+  };
+  const r = b.querySelector('#rmqr'); if (r) r.onclick = async () => { await api('/settings/payment-qr', { method: 'DELETE' }); refresh(); };
+}
+const bind = { orders: bindOrders, dashboard: bindOrders, payments: bindOrders, menu: bindMenu, categories: bindCategories, qr: bindQr, settings: bindSettings };
+
+refresh();
+// live order updates
+setInterval(() => { if (token && ['dashboard', 'orders', 'payments'].includes(tab)) refresh(true).catch(() => {}); }, 15000);
+</script></body></html>
