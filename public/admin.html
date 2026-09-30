@@ -300,7 +300,7 @@ async function enablePush(msg) {
 function bindSettings(b) {
   const pm = b.querySelector('#pushmsg');
   b.querySelector('#pushon').onclick = () => enablePush(pm);
-  b.querySelector('#pushtest').onclick = async () => { const d = await api('/push/test', { method: 'POST' }); pm.textContent = d.sent ? 'Test sent — check your phone.' : 'Nothing sent: no notification channel is set up yet.'; };
+  b.querySelector('#pushtest').onclick = async () => { const d = await api('/push/test', { method: 'POST' }); pm.textContent = d.sent ? 'Test sent to ' + d.phones + ' phone(s) — check your notifications.' : 'Not sent: ' + (d.why.join('; ') || 'unknown'); };
   b.querySelector('#s-save').onclick = async () => {
     const json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerMobile', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
     await api('/settings', { method: 'PUT', json });

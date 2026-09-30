@@ -225,21 +225,23 @@ const baseUrl = (req) => {
 const ownerLink = (req, o) => `${baseUrl(req)}/admin.html?order=${o.id}&sig=${orderSig(o.id)}`;
 
 // Pushes the alert to the owner's phone; tapping it opens the dashboard on that order.
-async function push(title, text, link) {
+async function push(title, text, link, why) {
   const jobs = [];
+  const fail = (m) => { console.error(m); if (why) why.push(m); };
   if (NTFY_TOPIC) jobs.push(fetch('https://ntfy.sh/' + encodeURIComponent(NTFY_TOPIC), { method: 'POST', body: text,
-    headers: { Title: title, Click: link, Priority: 'high', Tags: 'coffee' } }).then((r) => r.ok));
+    headers: { Title: title, Click: link, Priority: 'high', Tags: 'coffee' } }).then((r) => r.ok || (fail('ntfy HTTP ' + r.status), false)));
   if (TG_TOKEN && TG_CHAT) jobs.push(fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: TG_CHAT, text: text + '\n' + link }) }).then((r) => r.ok));
+    body: JSON.stringify({ chat_id: TG_CHAT, text: text + '\n' + link }) }).then((r) => r.ok || (fail('Telegram HTTP ' + r.status), false)));
   if (db.pushSubs && db.pushSubs.length) {
     webpush.setVapidDetails('mailto:owner@magicbrew.local', db.vapid.publicKey, db.vapid.privateKey);
     const payload = JSON.stringify({ title, body: text, url: link, tag: title });
     jobs.push(Promise.all(db.pushSubs.map((sub) => webpush.sendNotification(sub, payload, { TTL: 3600, urgency: 'high' }).then(() => true, (e) => {
-      if (e.statusCode === 404 || e.statusCode === 410) { db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== sub.endpoint); save(); }
-      else console.error('Web push failed', e.statusCode || e.message);
+      if (e.statusCode === 404 || e.statusCode === 410) { db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== sub.endpoint); save(); fail('Phone subscription expired — tap Enable notifications again'); }
+      else fail('Phone push failed: ' + (e.statusCode || '') + ' ' + (e.body || e.message));
       return false;
     }))).then((r) => r.some(Boolean)));
   }
+  if (!jobs.length) fail('No phone is subscribed yet — tap "Enable notifications on this phone" first');
   const res = await Promise.all(jobs.map((j) => j.catch((e) => { console.error('Notify failed', e.message); return false; })));
   return res.some(Boolean);
 }
@@ -331,7 +333,8 @@ admin.post('/push/unsubscribe', (req, res) => {
   db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== (req.body && req.body.endpoint)); save(); res.json({ ok: true });
 });
 admin.post('/push/test', async (req, res) => {
-  res.json({ sent: await push('Test notification', 'Magic Brew notifications are working ✅', baseUrl(req) + '/admin.html') });
+  const why = [], sent = await push('Test notification', 'Magic Brew notifications are working ✅', baseUrl(req) + '/admin.html', why);
+  res.json({ sent, why, phones: db.pushSubs.length });
 });
 
 admin.put('/settings', (req, res) => {
