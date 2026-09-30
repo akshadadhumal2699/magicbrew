@@ -82,7 +82,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', async (req, res, next) => {
   try {
     await loadDb();
-    if (!db.vapid) { db.vapid = process.env.VAPID_PUBLIC && process.env.VAPID_PRIVATE ? { publicKey: process.env.VAPID_PUBLIC, privateKey: process.env.VAPID_PRIVATE } : webpush.generateVAPIDKeys(); db.pushSubs = db.pushSubs || []; dirty = true; }
+    if (!db.pushSubs || db.vapid) { db.pushSubs = db.pushSubs || []; delete db.vapid; dirty = true; }
     if (db.settings.ownerWhatsApp !== undefined) { db.settings.ownerMobile = db.settings.ownerMobile || db.settings.ownerWhatsApp; delete db.settings.ownerWhatsApp; dirty = true; }
     const json = res.json.bind(res);
     res.json = (body) => { persist().then(() => json(body), (e) => { console.error(e); res.status(500); json({ error: 'Could not save changes' }); }); return res; };
@@ -137,6 +137,13 @@ app.post('/api/admin/key-login', (req, res) => {
   res.json({ token: newToken() });
 });
 // One-tap login from the notification link: the link carries a signature bound to that order id.
+// Permanent push (VAPID) keys derived from a stable server secret, so every instance always agrees on them.
+const VAPID = (() => {
+  if (process.env.VAPID_PUBLIC && process.env.VAPID_PRIVATE) return { publicKey: process.env.VAPID_PUBLIC, privateKey: process.env.VAPID_PRIVATE };
+  const seed = crypto.createHmac('sha256', REDIS_TOKEN || SECRET).update('magicbrew-vapid-v1').digest();
+  const ecdh = crypto.createECDH('prime256v1'); ecdh.setPrivateKey(seed);
+  return { publicKey: ecdh.getPublicKey().toString('base64url'), privateKey: seed.toString('base64url') };
+})();
 const orderSig = (id) => crypto.createHmac('sha256', SECRET).update('order-link|' + id).digest('hex').slice(0, 32);
 app.post('/api/admin/order-login', (req, res) => {
   const a = Buffer.from(String(req.body.sig || '')), b = Buffer.from(orderSig(+req.body.order || 0));
@@ -233,10 +240,10 @@ async function push(title, text, link, why) {
   if (TG_TOKEN && TG_CHAT) jobs.push(fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: TG_CHAT, text: text + '\n' + link }) }).then((r) => r.ok || (fail('Telegram HTTP ' + r.status), false)));
   if (db.pushSubs && db.pushSubs.length) {
-    webpush.setVapidDetails('mailto:owner@magicbrew.local', db.vapid.publicKey, db.vapid.privateKey);
+    webpush.setVapidDetails('mailto:owner@magicbrew.local', VAPID.publicKey, VAPID.privateKey);
     const payload = JSON.stringify({ title, body: text, url: link, tag: title });
     jobs.push(Promise.all(db.pushSubs.map((sub) => webpush.sendNotification(sub, payload, { TTL: 3600, urgency: 'high' }).then(() => true, (e) => {
-      if (e.statusCode === 404 || e.statusCode === 410) { db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== sub.endpoint); save(); fail('Phone subscription expired — tap Enable notifications again'); }
+      if ([401, 403, 404, 410].includes(e.statusCode)) { db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== sub.endpoint); save(); fail('Phone subscription expired — tap Enable notifications again'); }
       else fail('Phone push failed: ' + (e.statusCode || '') + ' ' + (e.body || e.message));
       return false;
     }))).then((r) => r.some(Boolean)));
@@ -320,8 +327,8 @@ const admin = express.Router();
 admin.use(auth);
 
 admin.get('/state', (req, res) => {
-  const { vapid, pushSubs, ...rest } = db;
-  res.json({ ...rest, notifiers: [...NOTIFIERS, ...(pushSubs.length ? ['phone push (' + pushSubs.length + ')'] : [])], vapidKey: vapid.publicKey });
+  const { pushSubs, vapid, ...rest } = db;
+  res.json({ ...rest, notifiers: [...NOTIFIERS, ...(pushSubs.length ? ['phone push (' + pushSubs.length + ')'] : [])], vapidKey: VAPID.publicKey });
 });
 admin.post('/push/subscribe', (req, res) => {
   const sub = req.body && req.body.subscription;

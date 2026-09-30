@@ -302,8 +302,9 @@ async function enablePush(msg) {
     }
     if (await Notification.requestPermission() !== 'granted') return (msg.textContent = 'Permission denied. Allow notifications for this site in browser settings.');
     const reg = await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
-    let sub = await reg.pushManager.getSubscription();
-    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(S.vapidKey) });
+    const old = await reg.pushManager.getSubscription();
+    if (old) await old.unsubscribe();   // a stale subscription made with an old key would be rejected (403)
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(S.vapidKey) });
     await api('/push/subscribe', { method: 'POST', json: { subscription: sub.toJSON() } });
     msg.textContent = '✅ This phone will now get new-order alerts.'; refresh(true);
   } catch (e) { msg.textContent = 'Could not enable: ' + e.message; }
