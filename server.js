@@ -111,7 +111,7 @@ async function storeImage(file) {
 // Stateless signed login tokens (serverless instances don't share memory)
 const SECRET = process.env.SESSION_SECRET || crypto.createHash('sha256').update('mb|' + ADMIN_PASSWORD).digest('hex');
 const sign = (exp) => crypto.createHmac('sha256', SECRET).update(String(exp)).digest('hex');
-const newToken = () => { const exp = Date.now() + 12 * 3600 * 1000; return exp + '.' + sign(exp); };
+const newToken = (hours = 12) => { const exp = Date.now() + hours * 3600 * 1000; return exp + '.' + sign(exp); };
 function validToken(t) {
   const [exp, sig] = String(t).split('.');
   if (!exp || !sig || +exp < Date.now()) return false;
@@ -163,6 +163,22 @@ app.post('/api/admin/otp/verify', (req, res) => {
   const good = Buffer.from(otpHash(exp, code)), got = Buffer.from(sig);
   if (good.length !== got.length || !crypto.timingSafeEqual(good, got)) return res.status(401).json({ error: 'Wrong code' });
   res.json({ token: newToken() });
+});
+// 4-digit PIN login (ADMIN_PIN env). Locks for 15 min after 5 wrong tries, counted in Redis when available.
+const ADMIN_PIN = /^\d{4}$/.test(process.env.ADMIN_PIN || '') ? process.env.ADMIN_PIN : '';
+const memFails = { n: 0, until: 0 };
+app.post('/api/admin/pin-login', async (req, res) => {
+  if (!ADMIN_PIN) return res.status(400).json({ error: 'PIN not set up yet (add ADMIN_PIN on the server)' });
+  const key = 'magicbrew:pinfails';
+  const locked = REMOTE ? +(await redis(['GET', key + ':lock'])) : memFails.until > Date.now();
+  if (locked) return res.status(429).json({ error: 'Too many wrong tries. Try again in 15 minutes.' });
+  const a = Buffer.from(String(req.body.pin || '')), b = Buffer.from(ADMIN_PIN);
+  if (a.length === b.length && crypto.timingSafeEqual(a, b)) { if (REMOTE) await redis(['DEL', key]); else memFails.n = 0; return res.json({ token: newToken(720) }); }
+  if (REMOTE) {
+    const n = await redis(['INCR', key]); await redis(['EXPIRE', key, 900]);
+    if (n >= 5) { await redis(['SET', key + ':lock', '1', 'EX', 900]); await redis(['DEL', key]); }
+  } else if (++memFails.n >= 5) { memFails.until = Date.now() + 900000; memFails.n = 0; }
+  res.status(401).json({ error: 'Wrong PIN' });
 });
 app.post('/api/admin/login', (req, res) => {
   if (process.env.VERCEL && !process.env.ADMIN_PASSWORD) return res.status(500).json({ error: 'Set the ADMIN_PASSWORD environment variable' });

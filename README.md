@@ -48,3 +48,7 @@ Do NOT set ADMIN_LOCAL_LOGIN on Vercel.
 ## Forgot password – email login code
 Free via Resend: sign up at resend.com with the owner's email, create an API key, then set `RESEND_API_KEY` and `OWNER_EMAIL` (the same email you signed up with)
 in Vercel and redeploy. On the login page tap "Forgot password? Email me a login code". You can also simply change `ADMIN_PASSWORD` in Vercel.
+
+## 4-digit PIN login (no typing)
+Set `ADMIN_PIN` (exactly 4 digits, e.g. `4821`) in Vercel > Environment Variables and redeploy. The login page shows a number keypad; the phone stays logged in for 30 days.
+5 wrong tries lock login for 15 minutes.

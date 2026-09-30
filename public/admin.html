@@ -30,13 +30,13 @@ pre{white-space:pre-wrap;background:#f4e9d8;padding:10px;border-radius:10px;font
 <script>
 const R = document.getElementById('root');
 let focusOrder = +new URLSearchParams(location.search).get('order') || 0, seenMax = null;
-let token = sessionStorage.getItem('tok'), S = null, tab = 'dashboard', editing = null, toast = '';
+let token = localStorage.getItem('tok'), S = null, tab = 'dashboard', editing = null, toast = '';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function api(url, opt = {}) {
   opt.headers = { ...(opt.headers || {}), Authorization: 'Bearer ' + token };
   if (opt.json) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(opt.json); }
   const r = await fetch('/api/admin' + url, opt);
-  if (r.status === 401) { sessionStorage.removeItem('tok'); token = null; renderLogin(); throw new Error('Session expired'); }
+  if (r.status === 401) { localStorage.removeItem('tok'); token = null; renderLogin(); throw new Error('Session expired'); }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) { alert(d.error || 'Error'); throw new Error(d.error); }
   return d;
@@ -46,6 +46,27 @@ const catName = (id) => (S.categories.find((c) => c.id === id) || {}).name || '�
 const fdate = (d) => new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 function renderLogin(err = '') {
+  let pin = '';
+  R.innerHTML = `<div class="page" style="margin-top:8vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad);min-height:1.4em" id="pe">${esc(err)}</p>
+  <div id="dots" style="font-size:2rem;letter-spacing:.6rem;margin:6px 0 14px">○○○○</div>
+  <div class="kb" style="grid-template-columns:repeat(3,1fr)">${[1,2,3,4,5,6,7,8,9,'C',0,'⌫'].map((k) => `<button type="button" data-p="${k}" style="padding:16px 0;font-size:1.3rem">${k}</button>`).join('')}</div>
+  <p><a href="#" id="usepw">Use password instead</a></p></div></div>`;
+  const dots = document.getElementById('dots'), pe = document.getElementById('pe');
+  const show = () => (dots.textContent = '●'.repeat(pin.length) + '○'.repeat(4 - pin.length));
+  R.querySelector('.kb').onclick = async (e) => {
+    const k = e.target.dataset && e.target.dataset.p; if (k === undefined) return;
+    pe.textContent = '';
+    pin = k === 'C' ? '' : k === '⌫' ? pin.slice(0, -1) : (pin + k).slice(0, 4);
+    show();
+    if (pin.length < 4) return;
+    const r = await fetch('/api/admin/pin-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { pin = ''; show(); pe.textContent = d.error || 'Failed'; return; }
+    token = d.token; localStorage.setItem('tok', token); refresh();
+  };
+  document.getElementById('usepw').onclick = (e) => { e.preventDefault(); renderPasswordLogin(); };
+}
+function renderPasswordLogin(err = '') {
   R.innerHTML = `<div class="page" style="margin-top:12vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad)">${esc(err)}</p>
   <input id="pw" type="text" class="masked" placeholder="Admin password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus>
   <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="ghost" id="kbt" type="button">⌨️ Use on-screen keyboard (no typing)</button><div id="kb"></div><br><button class="primary" id="login">Log in</button>
@@ -61,7 +82,7 @@ function renderLogin(err = '') {
       const v = await fetch('/api/admin/otp/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge: d.challenge, code: document.getElementById('otpc').value }) });
       const j = await v.json().catch(() => ({}));
       if (!v.ok) return (document.getElementById('otperr').textContent = j.error || 'Failed');
-      token = j.token; sessionStorage.setItem('tok', token); refresh();
+      token = j.token; localStorage.setItem('tok', token); refresh();
     };
   };
   document.getElementById('kbt').onclick = () => {
@@ -85,15 +106,15 @@ function renderLogin(err = '') {
     if (!d.available) return;
     const b = document.createElement('button');
     b.className = 'ghost'; b.style.marginTop = '10px'; b.textContent = 'Continue as owner (this computer only)';
-    b.onclick = async () => { token = (await (await fetch('/api/admin/local-login', { method: 'POST' })).json()).token; sessionStorage.setItem('tok', token); refresh(); };
+    b.onclick = async () => { token = (await (await fetch('/api/admin/local-login', { method: 'POST' })).json()).token; localStorage.setItem('tok', token); refresh(); };
     document.getElementById('login').after(b);
   }).catch(() => {});
   document.getElementById('showpw').onchange = (e) => document.getElementById('pw').classList.toggle('masked', !e.target.checked);
   document.getElementById('pw').focus();
   const doLogin = async () => {
     const r = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value }) });
-    if (!r.ok) return renderLogin('Wrong password');
-    token = (await r.json()).token; sessionStorage.setItem('tok', token); refresh();
+    if (!r.ok) return renderPasswordLogin('Wrong password');
+    token = (await r.json()).token; localStorage.setItem('tok', token); refresh();
   };
   document.getElementById('login').onclick = doLogin;
   document.getElementById('pw').onkeydown = (e) => e.key === 'Enter' && doLogin();
@@ -114,7 +135,7 @@ function draw() {
   R.innerHTML = `<div class="top"><b style="font-family:'Playfair Display'">${esc(S.settings.cafeName)} · Admin</b><button class="sm" id="logout">Log out</button></div>
   <div class="nav">${TABS.map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}${k === 'orders' && pend ? ` (${pend})` : ''}</button>`).join('')}</div>
   <div class="wrap" id="body"></div>`;
-  document.getElementById('logout').onclick = () => { sessionStorage.removeItem('tok'); token = null; renderLogin(); };
+  document.getElementById('logout').onclick = () => { localStorage.removeItem('tok'); token = null; renderLogin(); };
   document.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; draw(); }));
   const body = document.getElementById('body');
   body.innerHTML = { dashboard, orders, menu, categories, payments, qr, settings }[tab]();
@@ -297,7 +318,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
   if (osig && focusOrder) {
     try {
       const r = await fetch('/api/admin/order-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order: focusOrder, sig: osig }) });
-      if (r.ok) { token = (await r.json()).token; sessionStorage.setItem('tok', token); tab = 'orders'; }
+      if (r.ok) { token = (await r.json()).token; localStorage.setItem('tok', token); tab = 'orders'; }
     } catch {}
     history.replaceState(null, '', location.pathname);
   } else if (focusOrder) tab = 'orders';
@@ -306,7 +327,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
     history.replaceState(null, '', location.pathname);   // don't leave the key in the address bar
     try {
       const r = await fetch('/api/admin/key-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
-      if (r.ok) { token = (await r.json()).token; sessionStorage.setItem('tok', token); }
+      if (r.ok) { token = (await r.json()).token; localStorage.setItem('tok', token); }
     } catch {}
   }
   refresh();
