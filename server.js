@@ -8,14 +8,13 @@ const os = require('os');
 const { MENU_VERSION, OWNER_NAME, buildMenu, applyMenu } = require('./menu-data');
 
 const PORT = process.env.PORT || 3000;
+// Orders are sent to the owner's WhatsApp (one chat) via the WhatsApp Cloud API (Meta). Free-form messages only reach the owner while
+// the owner has messaged the business number in the last 24h; set WHATSAPP_TEMPLATE (an approved template with ONE body variable) to
+// reach them outside that window.
+const WA_TOKEN = process.env.WHATSAPP_TOKEN || '', WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID || '';
+const WA_TEMPLATE = process.env.WHATSAPP_TEMPLATE || '', WA_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'magicbrew123';
-// Free owner push notifications (configure one or both):
-//  - ntfy.sh: NTFY_TOPIC (owner installs the ntfy app and subscribes to that topic; no account needed)
-//  - Telegram: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (bot created via @BotFather)
-const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
-const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '', TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
-const webpush = require('web-push');
-const NOTIFIERS = [NTFY_TOPIC && 'ntfy', TG_TOKEN && TG_CHAT && 'telegram'].filter(Boolean);
+
 
 const DATA_FILE = path.join(__dirname, 'data', 'db.json');
 const UPLOADS = path.join(__dirname, 'uploads');
@@ -82,7 +81,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', async (req, res, next) => {
   try {
     await loadDb();
-    if (!db.pushSubs || db.vapid) { db.pushSubs = db.pushSubs || []; delete db.vapid; dirty = true; }
+    if (db.pushSubs || db.vapid) { delete db.pushSubs; delete db.vapid; dirty = true; }
     if (db.settings.ownerWhatsApp !== undefined) { db.settings.ownerMobile = db.settings.ownerMobile || db.settings.ownerWhatsApp; delete db.settings.ownerWhatsApp; dirty = true; }
     const json = res.json.bind(res);
     res.json = (body) => { persist().then(() => json(body), (e) => { console.error(e); res.status(500); json({ error: 'Could not save changes' }); }); return res; };
@@ -137,13 +136,6 @@ app.post('/api/admin/key-login', (req, res) => {
   res.json({ token: newToken() });
 });
 // One-tap login from the notification link: the link carries a signature bound to that order id.
-// Permanent push (VAPID) keys derived from a stable server secret, so every instance always agrees on them.
-const VAPID = (() => {
-  if (process.env.VAPID_PUBLIC && process.env.VAPID_PRIVATE) return { publicKey: process.env.VAPID_PUBLIC, privateKey: process.env.VAPID_PRIVATE };
-  const seed = crypto.createHmac('sha256', REDIS_TOKEN || SECRET).update('magicbrew-vapid-v1').digest();
-  const ecdh = crypto.createECDH('prime256v1'); ecdh.setPrivateKey(seed);
-  return { publicKey: ecdh.getPublicKey().toString('base64url'), privateKey: seed.toString('base64url') };
-})();
 const orderSig = (id) => crypto.createHmac('sha256', SECRET).update('order-link|' + id).digest('hex').slice(0, 32);
 app.post('/api/admin/order-login', (req, res) => {
   const a = Buffer.from(String(req.body.sig || '')), b = Buffer.from(orderSig(+req.body.order || 0));
@@ -165,7 +157,7 @@ app.post('/api/admin/otp/request', async (req, res) => {
 });
 app.post('/api/admin/otp/verify', (req, res) => {
   const [exp, sig] = String(req.body.challenge || '').split('.');
-  const code = String(req.body.code || '').replace(/D/g, '');
+  const code = String(req.body.code || '').replace(/\D/g, '');
   if (!exp || !sig || +exp < Date.now() || !code) return res.status(401).json({ error: 'Code expired — request a new one' });
   const good = Buffer.from(otpHash(exp, code)), got = Buffer.from(sig);
   if (good.length !== got.length || !crypto.timingSafeEqual(good, got)) return res.status(401).json({ error: 'Wrong code' });
@@ -231,37 +223,41 @@ const baseUrl = (req) => {
 };
 const ownerLink = (req, o) => `${baseUrl(req)}/admin.html?order=${o.id}&sig=${orderSig(o.id)}`;
 
-// Pushes the alert to the owner's phone; tapping it opens the dashboard on that order.
-async function push(title, text, link, why) {
-  const jobs = [];
-  const fail = (m) => { console.error(m); if (why) why.push(m); };
-  if (NTFY_TOPIC) jobs.push(fetch('https://ntfy.sh/' + encodeURIComponent(NTFY_TOPIC), { method: 'POST', body: text,
-    headers: { Title: title, Click: link, Priority: 'urgent', Tags: 'rotating_light,coffee' } }).then((r) => r.ok || (fail('ntfy HTTP ' + r.status), false)));
-  if (TG_TOKEN && TG_CHAT) jobs.push(fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: TG_CHAT, text: text + '\n' + link }) }).then((r) => r.ok || (fail('Telegram HTTP ' + r.status), false)));
-  if (db.pushSubs && db.pushSubs.length) {
-    webpush.setVapidDetails('mailto:owner@magicbrew.local', VAPID.publicKey, VAPID.privateKey);
-    const payload = JSON.stringify({ title, body: text, url: link, tag: title });
-    jobs.push(Promise.all(db.pushSubs.map((sub) => webpush.sendNotification(sub, payload, { TTL: 3600, urgency: 'high' }).then(() => true, (e) => {
-      if ([401, 403, 404, 410].includes(e.statusCode)) { db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== sub.endpoint); save(); fail('Phone subscription expired — tap Enable notifications again'); }
-      else fail('Phone push failed: ' + (e.statusCode || '') + ' ' + (e.body || e.message));
-      return false;
-    }))).then((r) => r.some(Boolean)));
-  }
-  if (!jobs.length) fail('No phone is subscribed yet — tap "Enable notifications on this phone" first');
-  const res = await Promise.all(jobs.map((j) => j.catch((e) => { console.error('Notify failed', e.message); return false; })));
-  return res.some(Boolean);
+const waNumber = (n) => { const d = String(n || '').replace(/\D/g, ''); return d.length === 10 ? '91' + d : d; };
+async function waPost(body) {
+  const r = await fetch(`https://graph.facebook.com/v20.0/${WA_PHONE_ID}/messages`, { method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ messaging_product: 'whatsapp', to: waNumber(db.settings.ownerMobile), ...body }) });
+  return { ok: r.ok, err: r.ok ? '' : `HTTP ${r.status} ${(await r.text()).slice(0, 300)}` };
 }
-async function notifyOwner(req, o, kind) {
-  const link = ownerLink(req, o), cu = db.settings.currency;
-  const title = kind === 'payment' ? 'Payment reported #' + o.id : 'New order #' + o.id;
-  const text = kind === 'payment'
-    ? `Customer reports payment for order #${o.id} (${cu}${o.total}). Tap to verify.`
-    : `#${o.id} · ${o.customer.name} · ${cu}${o.total}
-${o.items.map((i) => i.qty + '× ' + i.name).join(', ')}`;
-  console.log('OWNER NOTIFICATION:', title, '-', link);
-  return push(title, text, link);
+// Sends to the owner's WhatsApp; every order goes to the same chat. `why` collects failure reasons.
+async function sendWhatsApp(text, why = []) {
+  if (!WA_TOKEN || !WA_PHONE_ID) { why.push('WhatsApp is not connected (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID missing on the server)'); return false; }
+  if (!waNumber(db.settings.ownerMobile)) { why.push('Owner WhatsApp number is not set in Settings'); return false; }
+  try {
+    let r = await waPost({ type: 'text', text: { body: text } });
+    if (!r.ok && WA_TEMPLATE) {
+      why.push('Text message refused (' + r.err + '), retried with template');
+      const param = text.replace(/\s*\n+\s*/g, ' | ').replace(/ {2,}/g, ' ').slice(0, 1000);
+      r = await waPost({ type: 'template', template: { name: WA_TEMPLATE, language: { code: WA_LANG }, components: [{ type: 'body', parameters: [{ type: 'text', text: param }] }] } });
+    }
+    if (!r.ok) { why.push(r.err); console.error('WhatsApp error', r.err); }
+    return r.ok;
+  } catch (e) { why.push(e.message); console.error('WhatsApp send failed', e.message); return false; }
 }
+function orderText(o, req) {
+  const cu = db.settings.currency;
+  return [
+    `*New Order #${o.id}*`, `Customer: ${o.customer.name}`, `Mobile: ${o.customer.mobile}`, o.notes ? `Note: ${o.notes}` : null, '',
+    ...o.items.map((i) => `${i.qty} × ${i.name} – ${cu}${i.price * i.qty}`), '',
+    `*Total: ${cu}${o.total}*`, `Time: ${new Date(o.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`, '', `Open: ${ownerLink(req, o)}`,
+  ].filter((x) => x !== null).join('\n');
+}
+function paymentText(o, req) {
+  const cu = db.settings.currency;
+  return [`*Payment reported – Order #${o.id}*`, `Customer: ${o.customer.name} (${o.customer.mobile})`, `Total: ${cu}${o.total}`,
+    `Transaction ID: ${o.payment.txnId || 'Not provided'}`, 'Awaiting your verification.', '', `Open: ${ownerLink(req, o)}`].join('\n');
+}
+const notifyOwner = (req, o, kind, why) => sendWhatsApp(kind === 'payment' ? paymentText(o, req) : orderText(o, req), why);
 
 app.post('/api/orders', async (req, res) => {
   const { name, mobile, notes, cart } = req.body || {};
@@ -326,23 +322,7 @@ app.post('/api/orders/:id/payment', async (req, res) => {
 const admin = express.Router();
 admin.use(auth);
 
-admin.get('/state', (req, res) => {
-  const { pushSubs, vapid, ...rest } = db;
-  res.json({ ...rest, notifiers: [...NOTIFIERS, ...(pushSubs.length ? ['phone push (' + pushSubs.length + ')'] : [])], vapidKey: VAPID.publicKey });
-});
-admin.post('/push/subscribe', (req, res) => {
-  const sub = req.body && req.body.subscription;
-  if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Invalid subscription' });
-  db.pushSubs = [...db.pushSubs.filter((x) => x.endpoint !== sub.endpoint), sub].slice(-10);
-  save(); res.json({ ok: true });
-});
-admin.post('/push/unsubscribe', (req, res) => {
-  db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== (req.body && req.body.endpoint)); save(); res.json({ ok: true });
-});
-admin.post('/push/test', async (req, res) => {
-  const why = [], sent = await push('Test notification', 'Magic Brew notifications are working ✅', baseUrl(req) + '/admin.html', why);
-  res.json({ sent, why, phones: db.pushSubs.length });
-});
+admin.get('/state', (req, res) => res.json({ ...db, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID) }));
 
 admin.put('/settings', (req, res) => {
   const allowed = ['cafeName', 'tagline', 'ownerName', 'ownerMobile', 'upiId', 'upiName', 'publicUrl', 'currency'];
@@ -413,10 +393,15 @@ admin.put('/orders/:id', (req, res) => {
   if (req.body.paymentStatus === 'unpaid') o.payment = { status: 'unpaid', txnId: '' };
   save(); res.json(o);
 });
+admin.post('/whatsapp-test', async (req, res) => {
+  const why = [];
+  res.json({ sent: await sendWhatsApp('✅ Magic Brew test: new orders will arrive in this chat.', why), why });
+});
 admin.post('/orders/:id/notify', async (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
-  res.json({ sent: await notifyOwner(req, o, 'order'), link: ownerLink(req, o) });
+  const why = [];
+  res.json({ sent: await notifyOwner(req, o, 'order', why), why });
 });
 
 // QR code that customers scan to open the menu

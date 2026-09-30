@@ -14,20 +14,19 @@ PowerShell: `$env:ADMIN_PASSWORD="yourpass"; npm start`
 2. UPI ID (a QR with the exact bill amount is generated per order) and/or upload your own payment QR
 3. Public menu URL once deployed, then print the QR from Admin > Café QR
 
-## Owner order notifications (no WhatsApp)
-Orders are saved to the database and appear in the owner dashboard (/admin.html → Orders, refreshes every 8s with a beep).
-For each new order the owner's phone gets a push notification; tapping it opens `/admin.html?order=1005&sig=…`, which signs the owner in and
-highlights that order. Statuses: New Order, Accepted, Preparing, Ready, Completed, Cancelled; customers see them live on their status screen.
+## Orders → owner's WhatsApp (one chat)
+Every new order (and every "I've paid" report) is saved and then sent automatically to the owner's WhatsApp number from Admin > Settings. All
+messages come from the same business number, so they all land in one chat, each order as a new message with a link that opens the dashboard on that order.
+Statuses: New Order, Accepted, Preparing, Ready, Completed, Cancelled; customers see them live on their status screen.
 
-Notifications are free. The simplest is **phone push from the dashboard itself** (no app, no account, no env vars): open
-`/admin.html` on the owner's phone → Settings → "Enable notifications on this phone". On iPhone first tap Share → Add to Home Screen and open it
-from there. Alternatively (or additionally) set these as Vercel environment variables, then redeploy:
-- **ntfy (easiest, no account):** install the free "ntfy" app (Android/iOS), subscribe to a long random topic name (e.g. `magicbrew-k8x2q9f7a1`),
-  and set `NTFY_TOPIC` to the same name. Keep the topic secret.
-- **Telegram:** message @BotFather → /newbot → copy the token to `TELEGRAM_BOT_TOKEN`. Message your bot once, open
-  `https://api.telegram.org/bot<token>/getUpdates` and copy `chat.id` to `TELEGRAM_CHAT_ID`.
+Setup (Meta WhatsApp Cloud API, free test number available):
+1. developers.facebook.com > create an app > add WhatsApp. Copy the **Phone number ID** and create a **permanent access token** (System User).
+2. In Vercel set `WHATSAPP_TOKEN` and `WHATSAPP_PHONE_ID`, then redeploy.
+3. Admin > Settings: enter the owner WhatsApp number, tap "Send test message".
 
-Also set the public URL in Admin > Settings so links use your real domain. Without either, orders are still saved and shown in the dashboard.
+Important Meta rule: a free-form message only reaches the owner if the owner messaged the business number in the last 24 hours. To always reach them,
+create a message template in WhatsApp Manager with ONE body variable (e.g. "New order: {{1}}"), get it approved, and set `WHATSAPP_TEMPLATE` (and
+`WHATSAPP_TEMPLATE_LANG`, default `en`). The server falls back to it automatically. The dashboard's "Resend to WhatsApp" button re-sends any order.
 
 ## Payments
 UPI has no automatic confirmation without a payment gateway (Razorpay etc.). The customer taps "I've paid" (optionally entering the

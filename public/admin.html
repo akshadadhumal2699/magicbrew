@@ -1,7 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Magic Brew · Admin</title>
-<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#5a3420"><link rel="apple-touch-icon" href="/img/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <style>
@@ -169,7 +168,7 @@ function dashboard() {
   const paid = today.filter((o) => o.payment.status === 'paid');
   return `<div class="stats"><div class="stat"><b>${today.length}</b>Orders today</div><div class="stat"><b>${cur()}${today.reduce((s, o) => s + o.total, 0)}</b>Order value</div>
   <div class="stat"><b>${cur()}${paid.reduce((s, o) => s + o.total, 0)}</b>Paid (verified)</div><div class="stat"><b>${S.orders.filter((o) => o.status === 'new').length}</b>New orders</div></div>
-  ${!S.notifiers.length ? '<div class="panel err">⚠️ Phone notifications are not set up yet (see README: ntfy or Telegram) — new orders still appear here.</div>' : ''}
+  ${!S.whatsappApi ? '<div class="panel err">⚠️ WhatsApp is not connected yet (see README) — new orders still appear here.</div>' : !S.settings.ownerMobile ? '<div class="panel err">⚠️ Set the owner WhatsApp number in Settings.</div>' : ''}
   ${!S.settings.upiId && !S.settings.paymentQrImage ? '<div class="panel err">⚠️ Add your UPI ID or payment QR in Settings so customers can pay.</div>' : ''}
   <h3>Latest orders</h3>${S.orders.slice(0, 5).map(orderCard).join('') || '<p>No orders yet.</p>'}`;
 }
@@ -185,11 +184,13 @@ function orderCard(o) {
   <span class="badge">${STAT_LABEL[o.status]}</span> ${pb} ${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}
   <div class="acts">${STAT.map((s) => s === o.status ? `<button class="sm cur">${STAT_LABEL[s]}</button>` : `<button class="sm ${s === 'cancelled' ? 'danger' : ''}" data-os="${o.id}" data-s="${s}">${STAT_LABEL[s]}</button>`).join('')}
   ${o.payment.status !== 'paid' ? `<button class="sm fill" data-pay="${o.id}">Mark paid</button>` : ''}
+  <button class="sm" data-wa="${o.id}">Resend to WhatsApp</button>
 </div></div>`;
 }
 function orders() { return `<h3>All orders</h3>${S.orders.map(orderCard).join('') || '<p>No orders yet.</p>'}`; }
 function bindOrders(b) {
   b.querySelectorAll('[data-os]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.os, { method: 'PUT', json: { status: x.dataset.s } }); refresh(); }));
+  b.querySelectorAll('[data-wa]').forEach((x) => (x.onclick = async () => { x.disabled = true; const d = await api(`/orders/${x.dataset.wa}/notify`, { method: 'POST' }); x.disabled = false; x.textContent = d.sent ? 'Sent ✓' : 'Failed: ' + (d.why[0] || '').slice(0, 60); }));
   b.querySelectorAll('[data-pay]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.pay, { method: 'PUT', json: { paymentStatus: 'paid' } }); refresh(); }));
 }
 
@@ -285,34 +286,16 @@ function settings() {
   const s = S.settings;
   return `<h3>Settings</h3><div class="panel"><label>Café name</label><input id="s-cafeName" value="${esc(s.cafeName)}"><label>Tagline</label><input id="s-tagline" value="${esc(s.tagline)}">
   <label>Public menu URL (for the QR code, e.g. https://menu.magicbrew.in)</label><input id="s-publicUrl" value="${esc(s.publicUrl)}"></div>
-  <div class="panel"><b>New-order notifications</b> (alert with dashboard link is pushed to your phone)
-  <div class="acts"><button class="sm fill" id="pushon">🔔 Enable notifications on this phone</button><button class="sm" id="pushtest">Send test</button></div><small id="pushmsg" style="color:var(--muted)"></small><br><label>Owner mobile number (for your records)</label><input id="s-ownerMobile" value="${esc(s.ownerMobile)}" inputmode="numeric">
-  <small style="color:var(--muted)">${S.notifiers.length ? '✅ Phone notifications on via ' + S.notifiers.join(' + ') + '.' : 'Phone notifications not set up: orders still appear here and the dashboard beeps while open. See README (free ntfy or Telegram).'}</small></div>
+  <div class="panel"><b>Order messages on WhatsApp</b><label>Owner WhatsApp number (10 digits, or with country code) — every new order is sent to this one chat</label><input id="s-ownerMobile" value="${esc(s.ownerMobile)}" inputmode="numeric">
+  <div class="acts"><button class="sm" id="watest">Send test message</button></div><small id="wamsg" style="color:var(--muted)">${S.whatsappApi ? '✅ WhatsApp is connected.' : 'WhatsApp is not connected: add WHATSAPP_TOKEN and WHATSAPP_PHONE_ID on the server (see README).'}</small></div>
   <div class="panel"><b>Payment</b><label>UPI ID (e.g. magicbrew@okhdfc)</label><input id="s-upiId" value="${esc(s.upiId)}"><label>Payee name</label><input id="s-upiName" value="${esc(s.upiName)}">
   <small style="color:var(--muted)">A QR with the exact bill amount is generated per order from your UPI ID.</small>
   <label>Or upload your own bank/UPI QR image (overrides the generated QR)</label><input type="file" id="s-qr" accept="image/*">
   ${s.paymentQrImage ? `<br><img src="${esc(s.paymentQrImage)}" style="width:120px;margin-top:8px"><br><button class="sm danger" id="rmqr">Remove uploaded QR</button>` : ''}</div>
   <button class="primary" id="s-save">Save settings</button>`;
 }
-const b64 = (k) => Uint8Array.from(atob((k + '='.repeat((4 - k.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-async function enablePush(msg) {
-  try {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      return (msg.textContent = /iPhone|iPad/.test(navigator.userAgent) ? 'On iPhone: tap Share → Add to Home Screen, open the app from the home screen, then try again.' : 'This browser does not support notifications.');
-    }
-    if (await Notification.requestPermission() !== 'granted') return (msg.textContent = 'Permission denied. Allow notifications for this site in browser settings.');
-    const reg = await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
-    const old = await reg.pushManager.getSubscription();
-    if (old) await old.unsubscribe();   // a stale subscription made with an old key would be rejected (403)
-    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(S.vapidKey) });
-    await api('/push/subscribe', { method: 'POST', json: { subscription: sub.toJSON() } });
-    msg.textContent = '✅ This phone will now get new-order alerts.'; refresh(true);
-  } catch (e) { msg.textContent = 'Could not enable: ' + e.message; }
-}
 function bindSettings(b) {
-  const pm = b.querySelector('#pushmsg');
-  b.querySelector('#pushon').onclick = () => enablePush(pm);
-  b.querySelector('#pushtest').onclick = async () => { const d = await api('/push/test', { method: 'POST' }); pm.textContent = d.sent ? 'Test sent to ' + d.phones + ' phone(s) — check your notifications.' : 'Not sent: ' + (d.why.join('; ') || 'unknown'); };
+  b.querySelector('#watest').onclick = async () => { const m = b.querySelector('#wamsg'); m.textContent = 'Sending…'; const d = await api('/whatsapp-test', { method: 'POST' }); m.textContent = d.sent ? '✅ Sent — check the WhatsApp chat.' : 'Not sent: ' + (d.why.join('; ') || 'unknown'); };
   b.querySelector('#s-save').onclick = async () => {
     const json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerMobile', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
     await api('/settings', { method: 'PUT', json });
@@ -324,7 +307,7 @@ function bindSettings(b) {
 }
 const bind = { orders: bindOrders, dashboard: bindOrders, payments: bindOrders, menu: bindMenu, categories: bindCategories, qr: bindQr, settings: bindSettings };
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});   // clean up the old push worker
 (async () => {
   const qs = new URLSearchParams(location.search), osig = qs.get('sig');
   if (osig && focusOrder) {
