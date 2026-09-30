@@ -229,7 +229,7 @@ async function push(title, text, link, why) {
   const jobs = [];
   const fail = (m) => { console.error(m); if (why) why.push(m); };
   if (NTFY_TOPIC) jobs.push(fetch('https://ntfy.sh/' + encodeURIComponent(NTFY_TOPIC), { method: 'POST', body: text,
-    headers: { Title: title, Click: link, Priority: 'high', Tags: 'coffee' } }).then((r) => r.ok || (fail('ntfy HTTP ' + r.status), false)));
+    headers: { Title: title, Click: link, Priority: 'urgent', Tags: 'rotating_light,coffee' } }).then((r) => r.ok || (fail('ntfy HTTP ' + r.status), false)));
   if (TG_TOKEN && TG_CHAT) jobs.push(fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: TG_CHAT, text: text + '\n' + link }) }).then((r) => r.ok || (fail('Telegram HTTP ' + r.status), false)));
   if (db.pushSubs && db.pushSubs.length) {

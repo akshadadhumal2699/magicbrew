@@ -2,7 +2,7 @@ self.addEventListener('push', (e) => {
   const d = e.data ? e.data.json() : {};
   e.waitUntil(self.registration.showNotification(d.title || 'Magic Brew', {
     body: d.body || '', icon: '/img/icon-192.png', badge: '/img/icon-192.png', tag: d.tag, renotify: true,
-    vibrate: [200, 100, 200], requireInteraction: true, data: { url: d.url || '/admin.html' },
+    vibrate: [500, 200, 500, 200, 500, 200, 500, 200, 500], requireInteraction: true, silent: false, data: { url: d.url || '/admin.html' },
   }));
 });
 self.addEventListener('notificationclick', (e) => {

@@ -132,9 +132,12 @@ async function refresh(quiet) {
 const TABS = [['dashboard', 'Dashboard'], ['orders', 'Orders'], ['menu', 'Menu'], ['categories', 'Categories'], ['payments', 'Payments'], ['qr', 'Café QR'], ['settings', 'Settings']];
 function draw() {
   const pend = S.orders.filter((o) => o.status === 'new').length;
-  R.innerHTML = `<div class="top"><b style="font-family:'Playfair Display'">${esc(S.settings.cafeName)} · Admin</b><button class="sm" id="logout">Log out</button></div>
+  R.innerHTML = `<div class="top"><b style="font-family:'Playfair Display'">${esc(S.settings.cafeName)} · Admin</b><span><button class="sm" id="mute">${muted ? '🔇 Alarm off' : '🔊 Alarm on'}</button> <button class="sm" id="logout">Log out</button></span></div>
   <div class="nav">${TABS.map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}${k === 'orders' && pend ? ` (${pend})` : ''}</button>`).join('')}</div>
+  ${pend ? `<div style="background:#c0392b;color:#fff;padding:10px 16px;font-weight:600;text-align:center">🚨 ${pend} new order${pend > 1 ? 's' : ''} waiting — tap Accepted to stop the alarm</div>` : ''}
   <div class="wrap" id="body"></div>`;
+  keepAwake();
+  document.getElementById('mute').onclick = () => { muted = !muted; localStorage.setItem('mute', muted ? '1' : '0'); draw(); if (!muted) alarm(); };
   document.getElementById('logout').onclick = () => { localStorage.removeItem('tok'); token = null; renderLogin(); };
   document.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; draw(); }));
   const body = document.getElementById('body');
@@ -143,14 +146,22 @@ function draw() {
   const hl = body.querySelector('.hl');
   if (hl) hl.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
-function chime() {
-  try {
-    const c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
-    o.connect(g); g.connect(c.destination); o.frequency.value = 880; g.gain.setValueAtTime(0.2, c.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.8); o.start(); o.stop(c.currentTime + 0.8);
-  } catch {}
-  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+let actx = null, muted = localStorage.getItem('mute') === '1';
+document.addEventListener('click', () => { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch {} }, { capture: true });
+// Loud siren: alternating two-tone, ~3 seconds
+function alarm() {
+  if (muted || !actx || actx.state !== 'running') return;
+  const t0 = actx.currentTime, g = actx.createGain(); g.connect(actx.destination);
+  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.9, t0 + 0.05); g.gain.setValueAtTime(0.9, t0 + 2.8); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 3);
+  for (let k = 0; k < 6; k++) { const o = actx.createOscillator(); o.type = 'square'; o.frequency.value = k % 2 ? 660 : 990; o.connect(g); o.start(t0 + k * 0.5); o.stop(t0 + k * 0.5 + 0.5); }
+  if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]);
 }
+function chime() { alarm(); }
+// Keep ringing every 6s while any order is still "New Order"; stops when the owner accepts it (or mutes)
+setInterval(() => { if (token && S && S.orders.some((o) => o.status === 'new')) alarm(); }, 6000);
+let wl = null;
+async function keepAwake() { try { if (navigator.wakeLock && !wl) { wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', () => (wl = null)); } } catch {} }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) keepAwake(); });
 
 /* ---------- Dashboard ---------- */
 function dashboard() {
