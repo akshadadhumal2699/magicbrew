@@ -9,6 +9,8 @@ body{padding-bottom:30px}
 .top{background:var(--brand2);color:var(--gold);padding:14px 16px;display:flex;justify-content:space-between;align-items:center}
 .nav{display:flex;gap:6px;overflow-x:auto;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 .wrap{max-width:900px;margin:0 auto;padding:16px}
+.kb{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin:10px 0}.kb button{padding:10px 0;font-size:1rem;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--brand);font-weight:600}
+.kb button.w{grid-column:span 2}.kb button:active{background:#f1e4d0}
 .masked{-webkit-text-security:disc;text-security:disc}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:560px){.two{grid-template-columns:1fr}}
@@ -46,7 +48,24 @@ const fdate = (d) => new Date(d).toLocaleString('en-IN', { day: 'numeric', month
 function renderLogin(err = '') {
   R.innerHTML = `<div class="page" style="margin-top:12vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad)">${esc(err)}</p>
   <input id="pw" type="text" class="masked" placeholder="Admin password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus>
-  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="primary" id="login">Log in</button></div></div>`;
+  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="ghost" id="kbt" type="button">⌨️ Use on-screen keyboard (no typing)</button><div id="kb"></div><br><button class="primary" id="login">Log in</button></div></div>`;
+  document.getElementById('kbt').onclick = () => {
+    const kb = document.getElementById('kb'), pw = document.getElementById('pw');
+    if (kb.innerHTML) { kb.innerHTML = ''; return; }
+    let caps = false;
+    const rows = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+    const draw = () => {
+      kb.innerHTML = '<div class="kb">' + rows.join('').split('').map((c) => `<button type="button" data-k="${caps ? c.toUpperCase() : c}">${caps ? c.toUpperCase() : c}</button>`).join('') +
+        '<button type="button" class="w" data-k="CAPS">⇧ Aa</button><button type="button" class="w" data-k="DEL">⌫</button><button type="button" class="w" data-k="CLR">Clear</button></div>';
+      pw.classList.remove('masked');
+    };
+    kb.onclick = (e) => {
+      const k = e.target.dataset && e.target.dataset.k; if (!k) return;
+      if (k === 'CAPS') { caps = !caps; return draw(); }
+      pw.value = k === 'DEL' ? pw.value.slice(0, -1) : k === 'CLR' ? '' : pw.value + k;
+    };
+    pw.readOnly = true; draw();
+  };
   fetch('/api/admin/local-login').then((r) => r.json()).then((d) => {
     if (!d.available) return;
     const b = document.createElement('button');
