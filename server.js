@@ -9,8 +9,13 @@ const { MENU_VERSION, OWNER_NAME, buildMenu, applyMenu } = require('./menu-data'
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'magicbrew123';
-const WA_TOKEN = process.env.WHATSAPP_TOKEN || '';      // optional: WhatsApp Cloud API
-const WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID || '';
+// Free owner push notifications (configure one or both):
+//  - ntfy.sh: NTFY_TOPIC (owner installs the ntfy app and subscribes to that topic; no account needed)
+//  - Telegram: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (bot created via @BotFather)
+const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '', TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
+const webpush = require('web-push');
+const NOTIFIERS = [NTFY_TOPIC && 'ntfy', TG_TOKEN && TG_CHAT && 'telegram'].filter(Boolean);
 
 const DATA_FILE = path.join(__dirname, 'data', 'db.json');
 const UPLOADS = path.join(__dirname, 'uploads');
@@ -20,7 +25,7 @@ function seed() {
   return {
     settings: {
       cafeName: 'Magic Brew Café & More', tagline: 'Brewed with magic', ownerName: OWNER_NAME,
-      ownerWhatsApp: '', upiId: '', upiName: 'Magic Brew Cafe',
+      ownerMobile: '', upiId: '', upiName: 'Magic Brew Cafe',
       publicUrl: '', paymentQrImage: '', currency: '₹',
     },
     ...buildMenu(), menuVersion: MENU_VERSION,
@@ -77,6 +82,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', async (req, res, next) => {
   try {
     await loadDb();
+    if (!db.vapid) { db.vapid = process.env.VAPID_PUBLIC && process.env.VAPID_PRIVATE ? { publicKey: process.env.VAPID_PUBLIC, privateKey: process.env.VAPID_PRIVATE } : webpush.generateVAPIDKeys(); db.pushSubs = db.pushSubs || []; dirty = true; }
+    if (db.settings.ownerWhatsApp !== undefined) { db.settings.ownerMobile = db.settings.ownerMobile || db.settings.ownerWhatsApp; delete db.settings.ownerWhatsApp; dirty = true; }
     const json = res.json.bind(res);
     res.json = (body) => { persist().then(() => json(body), (e) => { console.error(e); res.status(500); json({ error: 'Could not save changes' }); }); return res; };
     next();
@@ -129,6 +136,13 @@ app.post('/api/admin/key-login', (req, res) => {
   if (!MAGIC || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Invalid link' });
   res.json({ token: newToken() });
 });
+// One-tap login from the notification link: the link carries a signature bound to that order id.
+const orderSig = (id) => crypto.createHmac('sha256', SECRET).update('order-link|' + id).digest('hex').slice(0, 32);
+app.post('/api/admin/order-login', (req, res) => {
+  const a = Buffer.from(String(req.body.sig || '')), b = Buffer.from(orderSig(+req.body.order || 0));
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Invalid link' });
+  res.json({ token: newToken() });
+});
 app.post('/api/admin/login', (req, res) => {
   if (process.env.VERCEL && !process.env.ADMIN_PASSWORD) return res.status(500).json({ error: 'Set the ADMIN_PASSWORD environment variable' });
   const a = Buffer.from(String(req.body.password || ''));
@@ -166,44 +180,41 @@ app.get('/api/menu', (req, res) => {
   res.json({ settings: publicSettings(), categories, items: db.items });
 });
 
-function orderText(o, s) {
-  const lines = o.items.map((i) => `${i.qty} × ${i.name} – ${s.currency}${i.price * i.qty}`);
-  return [
-    `*New Order #${o.id}*`,
-    `Customer: ${o.customer.name}`,
-    `Mobile: ${o.customer.mobile}`,
-    o.notes ? `Note: ${o.notes}` : null,
-    '', ...lines, '',
-    `*Total: ${s.currency}${o.total}*`,
-    `Time: ${new Date(o.createdAt).toLocaleString('en-IN')}`,
-  ].filter((x) => x !== null).join('\n');
-}
-function paymentText(o, s) {
-  const lines = o.items.map((i) => `${i.qty} × ${i.name}`);
-  return [
-    `*Payment ${o.payment.status === 'paid' ? 'Received' : 'Reported'} – Order #${o.id}*`,
-    `Customer: ${o.customer.name}`,
-    `Mobile: ${o.customer.mobile}`,
-    '', ...lines, '',
-    `Total Bill: ${s.currency}${o.total}`,
-    `Payment Status: ${o.payment.status === 'paid' ? 'Paid' : 'Paid (awaiting owner verification)'}`,
-    `Transaction ID: ${o.payment.txnId || 'Not provided'}`,
-  ].join('\n');
-}
-const waLink = (text) => `https://wa.me/${db.settings.ownerWhatsApp.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
+const baseUrl = (req) => {
+  if (db.settings.publicUrl) return db.settings.publicUrl.replace(/\/$/, '');
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  return (/^(localhost|127\.)/.test(host) ? 'http://' : 'https://') + host;
+};
+const ownerLink = (req, o) => `${baseUrl(req)}/admin.html?order=${o.id}&sig=${orderSig(o.id)}`;
 
-// Sends automatically if Cloud API creds are configured; otherwise the client/admin uses the wa.me link.
-async function sendWhatsApp(text) {
-  if (!WA_TOKEN || !WA_PHONE_ID || !db.settings.ownerWhatsApp) return false;
-  try {
-    const r = await fetch(`https://graph.facebook.com/v20.0/${WA_PHONE_ID}/messages`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messaging_product: 'whatsapp', to: db.settings.ownerWhatsApp.replace(/\D/g, ''), type: 'text', text: { body: text } }),
-    });
-    if (!r.ok) console.error('WhatsApp API error', r.status, await r.text());
-    return r.ok;
-  } catch (e) { console.error('WhatsApp send failed', e.message); return false; }
+// Pushes the alert to the owner's phone; tapping it opens the dashboard on that order.
+async function push(title, text, link) {
+  const jobs = [];
+  if (NTFY_TOPIC) jobs.push(fetch('https://ntfy.sh/' + encodeURIComponent(NTFY_TOPIC), { method: 'POST', body: text,
+    headers: { Title: title, Click: link, Priority: 'high', Tags: 'coffee' } }).then((r) => r.ok));
+  if (TG_TOKEN && TG_CHAT) jobs.push(fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: TG_CHAT, text: text + '\n' + link }) }).then((r) => r.ok));
+  if (db.pushSubs && db.pushSubs.length) {
+    webpush.setVapidDetails('mailto:owner@magicbrew.local', db.vapid.publicKey, db.vapid.privateKey);
+    const payload = JSON.stringify({ title, body: text, url: link, tag: title });
+    jobs.push(Promise.all(db.pushSubs.map((sub) => webpush.sendNotification(sub, payload, { TTL: 3600, urgency: 'high' }).then(() => true, (e) => {
+      if (e.statusCode === 404 || e.statusCode === 410) { db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== sub.endpoint); save(); }
+      else console.error('Web push failed', e.statusCode || e.message);
+      return false;
+    }))).then((r) => r.some(Boolean)));
+  }
+  const res = await Promise.all(jobs.map((j) => j.catch((e) => { console.error('Notify failed', e.message); return false; })));
+  return res.some(Boolean);
+}
+async function notifyOwner(req, o, kind) {
+  const link = ownerLink(req, o), cu = db.settings.currency;
+  const title = kind === 'payment' ? 'Payment reported #' + o.id : 'New order #' + o.id;
+  const text = kind === 'payment'
+    ? `Customer reports payment for order #${o.id} (${cu}${o.total}). Tap to verify.`
+    : `#${o.id} · ${o.customer.name} · ${cu}${o.total}
+${o.items.map((i) => i.qty + '× ' + i.name).join(', ')}`;
+  console.log('OWNER NOTIFICATION:', title, '-', link);
+  return push(title, text, link);
 }
 
 app.post('/api/orders', async (req, res) => {
@@ -231,9 +242,9 @@ app.post('/api/orders', async (req, res) => {
   };
   db.orders.unshift(order);
   save();
-  const text = orderText(order, db.settings);
-  const sent = await sendWhatsApp(text);
-  res.json({ order, whatsappSent: sent, whatsappLink: db.settings.ownerWhatsApp ? waLink(text) : null });
+  order.ownerNotified = await notifyOwner(req, order, 'order');
+  save();
+  res.json({ order });
 });
 
 app.get('/api/orders/:id', (req, res) => {
@@ -261,19 +272,33 @@ app.post('/api/orders/:id/payment', async (req, res) => {
   if (o.payment.status === 'paid') return res.json({ order: o });
   o.payment = { status: 'reported', txnId: String(req.body.txnId || '').trim().slice(0, 40), reportedAt: new Date().toISOString() };
   save();
-  const text = paymentText(o, db.settings);
-  const sent = await sendWhatsApp(text);
-  res.json({ order: o, whatsappSent: sent, whatsappLink: db.settings.ownerWhatsApp ? waLink(text) : null });
+  await notifyOwner(req, o, 'payment');
+  res.json({ order: o });
 });
 
 // ---------- admin API ----------
 const admin = express.Router();
 admin.use(auth);
 
-admin.get('/state', (req, res) => res.json({ ...db, orders: db.orders, sessionsOk: true, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID) }));
+admin.get('/state', (req, res) => {
+  const { vapid, pushSubs, ...rest } = db;
+  res.json({ ...rest, notifiers: [...NOTIFIERS, ...(pushSubs.length ? ['phone push (' + pushSubs.length + ')'] : [])], vapidKey: vapid.publicKey });
+});
+admin.post('/push/subscribe', (req, res) => {
+  const sub = req.body && req.body.subscription;
+  if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Invalid subscription' });
+  db.pushSubs = [...db.pushSubs.filter((x) => x.endpoint !== sub.endpoint), sub].slice(-10);
+  save(); res.json({ ok: true });
+});
+admin.post('/push/unsubscribe', (req, res) => {
+  db.pushSubs = db.pushSubs.filter((x) => x.endpoint !== (req.body && req.body.endpoint)); save(); res.json({ ok: true });
+});
+admin.post('/push/test', async (req, res) => {
+  res.json({ sent: await push('Test notification', 'Magic Brew notifications are working ✅', baseUrl(req) + '/admin.html') });
+});
 
 admin.put('/settings', (req, res) => {
-  const allowed = ['cafeName', 'tagline', 'ownerName', 'ownerWhatsApp', 'upiId', 'upiName', 'publicUrl', 'currency'];
+  const allowed = ['cafeName', 'tagline', 'ownerName', 'ownerMobile', 'upiId', 'upiName', 'publicUrl', 'currency'];
   for (const k of allowed) if (k in req.body) db.settings[k] = String(req.body[k]).trim();
   save(); res.json(db.settings);
 });
@@ -336,15 +361,15 @@ admin.delete('/items/:id', (req, res) => { db.items = db.items.filter((i) => i.i
 admin.put('/orders/:id', (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
-  if (['new', 'preparing', 'ready', 'completed', 'cancelled'].includes(req.body.status)) o.status = req.body.status;
+  if (['new', 'accepted', 'preparing', 'ready', 'completed', 'cancelled'].includes(req.body.status)) o.status = req.body.status;
   if (req.body.paymentStatus === 'paid') { o.payment.status = 'paid'; o.payment.confirmedAt = new Date().toISOString(); }
   if (req.body.paymentStatus === 'unpaid') o.payment = { status: 'unpaid', txnId: '' };
   save(); res.json(o);
 });
-admin.get('/orders/:id/whatsapp', (req, res) => {
+admin.post('/orders/:id/notify', async (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
-  res.json({ order: waLink(orderText(o, db.settings)), payment: waLink(paymentText(o, db.settings)) });
+  res.json({ sent: await notifyOwner(req, o, 'order'), link: ownerLink(req, o) });
 });
 
 // QR code that customers scan to open the menu
