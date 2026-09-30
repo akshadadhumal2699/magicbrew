@@ -165,7 +165,7 @@ app.post('/api/admin/otp/verify', (req, res) => {
   res.json({ token: newToken() });
 });
 // 4-digit PIN login (ADMIN_PIN env). Locks for 15 min after 5 wrong tries, counted in Redis when available.
-const ADMIN_PIN = /^\d{4}$/.test(process.env.ADMIN_PIN || '') ? process.env.ADMIN_PIN : '';
+const ADMIN_PIN = /^\d{4}$/.test((process.env.ADMIN_PIN || '').trim()) ? process.env.ADMIN_PIN.trim() : '';
 const memFails = { n: 0, until: 0 };
 app.post('/api/admin/pin-login', async (req, res) => {
   if (!ADMIN_PIN) return res.status(400).json({ error: 'PIN not set up yet (add ADMIN_PIN on the server)' });
