@@ -143,6 +143,27 @@ app.post('/api/admin/order-login', (req, res) => {
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Invalid link' });
   res.json({ token: newToken() });
 });
+// Email login code (free via Resend). Code is emailed only to OWNER_EMAIL; the server keeps no state —
+// the challenge is a signed expiry + hash of the code.
+const RESEND_KEY = process.env.RESEND_API_KEY || '', OWNER_EMAIL = process.env.OWNER_EMAIL || '';
+const otpHash = (exp, code) => crypto.createHmac('sha256', SECRET).update('otp|' + exp + '|' + code).digest('hex');
+app.post('/api/admin/otp/request', async (req, res) => {
+  if (!RESEND_KEY || !OWNER_EMAIL) return res.status(400).json({ error: 'Email login is not set up (add RESEND_API_KEY and OWNER_EMAIL on the server)' });
+  const code = String(crypto.randomInt(0, 1e8)).padStart(8, '0'), exp = Date.now() + 10 * 60 * 1000;
+  const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + RESEND_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: 'Magic Brew <onboarding@resend.dev>', to: [OWNER_EMAIL], subject: 'Your Magic Brew login code: ' + code,
+      text: 'Your owner login code is ' + code + '. It expires in 10 minutes. If you did not request it, ignore this email.' }) }).catch(() => null);
+  if (!r || !r.ok) { console.error('Resend error', r && r.status, r && await r.text()); return res.status(502).json({ error: 'Could not send the email' }); }
+  res.json({ challenge: exp + '.' + otpHash(exp, code), hint: OWNER_EMAIL.replace(/^(.).*(@.*)$/, '$1***$2') });
+});
+app.post('/api/admin/otp/verify', (req, res) => {
+  const [exp, sig] = String(req.body.challenge || '').split('.');
+  const code = String(req.body.code || '').replace(/D/g, '');
+  if (!exp || !sig || +exp < Date.now() || !code) return res.status(401).json({ error: 'Code expired — request a new one' });
+  const good = Buffer.from(otpHash(exp, code)), got = Buffer.from(sig);
+  if (good.length !== got.length || !crypto.timingSafeEqual(good, got)) return res.status(401).json({ error: 'Wrong code' });
+  res.json({ token: newToken() });
+});
 app.post('/api/admin/login', (req, res) => {
   if (process.env.VERCEL && !process.env.ADMIN_PASSWORD) return res.status(500).json({ error: 'Set the ADMIN_PASSWORD environment variable' });
   const a = Buffer.from(String(req.body.password || ''));

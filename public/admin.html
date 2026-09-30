@@ -48,7 +48,22 @@ const fdate = (d) => new Date(d).toLocaleString('en-IN', { day: 'numeric', month
 function renderLogin(err = '') {
   R.innerHTML = `<div class="page" style="margin-top:12vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad)">${esc(err)}</p>
   <input id="pw" type="text" class="masked" placeholder="Admin password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus>
-  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="ghost" id="kbt" type="button">⌨️ Use on-screen keyboard (no typing)</button><div id="kb"></div><br><button class="primary" id="login">Log in</button></div></div>`;
+  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="ghost" id="kbt" type="button">⌨️ Use on-screen keyboard (no typing)</button><div id="kb"></div><br><button class="primary" id="login">Log in</button>
+  <p><a href="#" id="otp">Forgot password? Email me a login code</a></p><div id="otpbox"></div></div></div>`;
+  document.getElementById('otp').onclick = async (e) => {
+    e.preventDefault();
+    const box = document.getElementById('otpbox'); box.textContent = 'Sending…';
+    const r = await fetch('/api/admin/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { box.innerHTML = '<p style="color:var(--bad)">' + esc(d.error || 'Failed') + '</p>'; return; }
+    box.innerHTML = '<p>Code sent to ' + esc(d.hint) + '</p><input id="otpc" inputmode="numeric" maxlength="8" placeholder="8-digit code"><br><br><button class="primary" id="otpgo">Verify &amp; log in</button><p id="otperr" style="color:var(--bad)"></p>';
+    document.getElementById('otpgo').onclick = async () => {
+      const v = await fetch('/api/admin/otp/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge: d.challenge, code: document.getElementById('otpc').value }) });
+      const j = await v.json().catch(() => ({}));
+      if (!v.ok) return (document.getElementById('otperr').textContent = j.error || 'Failed');
+      token = j.token; sessionStorage.setItem('tok', token); refresh();
+    };
+  };
   document.getElementById('kbt').onclick = () => {
     const kb = document.getElementById('kb'), pw = document.getElementById('pw');
     if (kb.innerHTML) { kb.innerHTML = ''; return; }

@@ -44,3 +44,7 @@ Stored in data/db.json; uploaded photos in uploads/. Back these up.
 4. Redeploy. Open https://<project>.vercel.app/admin.html, log in, set WhatsApp number and UPI ID in Settings.
 5. Admin > Café QR now shows the QR for your live address — print it.
 Do NOT set ADMIN_LOCAL_LOGIN on Vercel.
+
+## Forgot password – email login code
+Free via Resend: sign up at resend.com with the owner's email, create an API key, then set `RESEND_API_KEY` and `OWNER_EMAIL` (the same email you signed up with)
+in Vercel and redeploy. On the login page tap "Forgot password? Email me a login code". You can also simply change `ADMIN_PASSWORD` in Vercel.
