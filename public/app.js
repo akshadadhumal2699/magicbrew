@@ -261,6 +261,19 @@ async function placeOrder() {
 // the customer's private link to this order's status + bill (works later, from any device)
 const orderLink = (o) => `${location.origin}/?o=${o.id}&t=${encodeURIComponent(o.token || '')}`;
 const tq = () => '?t=' + encodeURIComponent(order.token || localStorage.getItem('lastOrderTok') || '');
+// after the order is sent the customer stays on this page for 10 seconds, then lands back on the menu
+let backTimer = null;
+function startBackCountdown() {
+  if (backTimer) return;
+  let n = 10;
+  const tick = () => {
+    const el = document.getElementById('cd');
+    if (view !== 'confirm' || !el) { clearInterval(backTimer); backTimer = null; return; }   // customer moved on (e.g. tapped Pay)
+    if (n <= 0) { clearInterval(backTimer); backTimer = null; location.href = '/'; return; }
+    el.textContent = `Taking you back to the menu in ${n}s…`; n--;
+  };
+  tick(); backTimer = setInterval(tick, 1000);
+}
 function revealOrderLinks() { const el = document.getElementById('after'); if (el && el.hidden) { el.hidden = false; document.getElementById('opening')?.remove(); } }
 
 function orderSummary(o) {
@@ -273,7 +286,7 @@ const waBtn = (href, label) =>
 function confirmView() {
   const d = window.__wa || {};
   const needSend = !d.whatsappSent && d.whatsappLink;
-  if (view === 'confirm') setTimeout(revealOrderLinks, needSend ? 3500 : 600);   // a short delay, then the order link appears
+  if (view === 'confirm') setTimeout(() => { revealOrderLinks(); if (!needSend) startBackCountdown(); }, needSend ? 3500 : 600);   // a short delay, then the order link appears
   return `<div class="page center"><div class="big">${needSend ? '💬' : '✅'}</div><h2>${needSend ? 'Almost there!' : 'Order Placed!'}</h2>
   <p>Order <b>#${order.id}</b> for ${esc(order.customer.name)}</p>
   ${needSend ? `<div class="panel hint2" id="opening"><b>Opening WhatsApp…</b><br>Just press <b>Send</b> in WhatsApp to place your order.</div>${waBtn(d.whatsappLink, 'Open WhatsApp again')}` : ''}
@@ -281,9 +294,16 @@ function confirmView() {
   <div id="after" hidden><div class="panel" style="text-align:left"><b>Your order link</b><small style="display:block;color:var(--muted);margin:2px 0 8px">Keep it to check your order and pay the bill any time.</small>
     <input readonly value="${esc(orderLink(order))}" onfocus="this.select()" style="font-size:.78rem"><button class="ghost" style="margin-top:8px" data-copy>Copy link</button></div>
     <button class="primary" data-go="pay">Pay the Bill · ${cur()}${order.total}</button>
-    <p><a href="#" data-go="status">View order status</a> · <a href="#" data-go="menu">Back to menu</a></p></div></div>`;
+    <p><a href="#" data-go="status">View order status</a> · <a href="#" data-go="menu">Back to menu</a></p></div><p class="muted2" id="cd"></p></div>`;
 }
 
+// Open Google Pay directly (the generic upi:// link lets Android pick any app, WhatsApp included)
+function gpayLink(upiLink) {
+  const q = upiLink.split('?')[1] || '';
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) return 'gpay://upi/pay?' + q;
+  if (/Android/i.test(navigator.userAgent)) return `intent://pay?${q}#Intent;scheme=upi;package=com.google.android.apps.nbu.paisa.user;end`;
+  return upiLink;
+}
 async function payView() {
   $app.innerHTML = '<div class="page center"><p>Loading payment…</p></div>';
   const p = await api(`/api/orders/${order.id}/pay${tq()}`);
@@ -291,7 +311,8 @@ async function payView() {
   const body = qr
     ? `<img class="qrimg" src="${esc(qr)}" alt="Payment QR">
       <p style="margin:8px 0"><b>${cur()}${order.total}</b> to ${esc(menu.settings.upiName)}</p>
-      ${p.upiLink ? `<a class="primary" style="display:block;text-decoration:none;margin-bottom:10px" href="${esc(p.upiLink)}">Pay with UPI app</a>` : ''}
+      ${p.upiLink ? `<a class="primary" style="display:block;text-decoration:none;margin-bottom:10px" href="${esc(gpayLink(p.upiLink))}">Pay with Google Pay</a>
+      <a href="${esc(p.upiLink)}" style="display:block;margin-bottom:10px;font-size:.85rem">Use another UPI app</a>` : ''}
       ${p.upiId ? `<small style="color:var(--muted)">UPI ID: ${esc(p.upiId)}</small>` : ''}`
     : `<p>The café hasn't set up online payment yet. Please pay at the counter.</p>`;
   $app.innerHTML = `<div class="page center"><button class="back" style="float:left" data-go="confirm">← Back</button><h2 style="clear:both">Pay the Bill</h2>
@@ -392,7 +413,7 @@ window.addEventListener('scroll', () => {
   }
 }
 // back from WhatsApp: show the order link right away; keep the order status fresh
-document.addEventListener('visibilitychange', () => { if (!document.hidden && view === 'confirm') revealOrderLinks(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && view === 'confirm') { revealOrderLinks(); startBackCountdown(); } });
 setInterval(() => { if (view === 'status' && !document.hidden) statusView(); }, 20000);
 
 api('/api/menu')

@@ -255,3 +255,4 @@ html{background:var(--cream)}body.mb{min-height:100vh;background-attachment:fixe
 
 /* ---------- ORDER CONFIRM ---------- */
 .hint2{background:#fff8e1;border:1px dashed #d9a441;text-align:center;line-height:1.5}
+.muted2{text-align:center;color:var(--muted);font-size:.85rem;min-height:1.3em}
