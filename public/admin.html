@@ -274,6 +274,7 @@ function ordersTab() {
   const days = {}; os.forEach((o) => (days[odate(o)] = days[odate(o)] || []).push(o));
   const extra = `<label>Status<select data-chg="ostatus"><option value="all">All</option>${STAT.map((s) => `<option ${f.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>`;
   return `${periodBar('orders', extra)}
+  ${S.orders.length ? `<div class="acts" style="justify-content:flex-end;margin:8px 0"><button class="btn sm" data-act="clearorders">🗑 Clear all orders</button></div>` : ''}
   <div class="grid">${kpi('ord', '📦', 'Total Orders', live.length, cancelled ? `+ ${cancelled} cancelled` : '')}${kpi('sales', '💰', 'Total Business', money(total), 'cancelled orders excluded')}
   ${kpi('profit', '✅', 'Verified Paid', money(paid))}${kpi('exp', '⏳', 'Payment Pending', money(total - paid))}</div>
   ${Object.keys(days).sort().reverse().map((d) => { const dl = days[d].filter((o) => o.status !== 'cancelled');
@@ -458,6 +459,12 @@ const ACT = {
   // orders
   os: (el) => putOrder(el.dataset.id, { status: el.dataset.s }),
   pay: (el) => putOrder(el.dataset.id, { paymentStatus: 'paid' }),
+  clearorders: async () => {
+    const n = S.orders.length;
+    if (!n || prompt(`This permanently deletes all ${n} orders and cannot be undone.\nType DELETE to confirm.`) !== 'DELETE') return;
+    await api('/orders', { method: 'DELETE', json: { confirm: 'DELETE' } });
+    flash('All orders cleared ✓'); refresh();
+  },
   wa: async (el) => { const l = await api(`/orders/${el.dataset.id}/whatsapp`); window.open(orderById(el.dataset.id).payment.status === 'unpaid' ? l.order : l.payment, '_blank'); },
   // menu
   add: () => { if (!S.categories.length) return alert('Add a category first'); editing = 'new'; draw(); },

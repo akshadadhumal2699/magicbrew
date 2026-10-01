@@ -474,6 +474,13 @@ admin.put('/orders/:id', (req, res) => {
   if (req.body.paymentStatus === 'unpaid') o.payment = { status: 'unpaid', txnId: '' };
   save(); res.json(o);
 });
+// Wipe every order and restart numbering. Menu, settings, offers and expenses are untouched.
+admin.delete('/orders', (req, res) => {
+  if (req.body.confirm !== 'DELETE') return res.status(400).json({ error: 'Confirmation required' });
+  const removed = db.orders.length;
+  db.orders = []; db.nextOrderId = 1001;
+  save(); res.json({ ok: true, removed });
+});
 admin.get('/orders/:id/whatsapp', (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
