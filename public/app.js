@@ -17,23 +17,18 @@ const cartCount = () => cartLines().reduce((s, l) => s + l.qty, 0);
 const cartTotal = () => cartLines().reduce((s, l) => s + l.qty * l.it.price, 0);
 
 // ---------- content shown around the menu ----------
-// [file in /img/posters, title, category key it belongs to]
+// Best Sellers carousel: [file in /img/posters, title, category key it belongs to]
+// Only the owner's picks are listed; the other poster files stay unused.
 const POSTERS = [
   ['sizzling-burger', 'Sizzling Cheese Burgers', 'burgers'],
   ['sizzling-brownie', 'Sizzling Brownie', 'desserts'],
-  ['rolls', 'Rolls', 'rolls'],
   ['mug-cakes', 'Mug Cakes', 'desserts'],
   ['chocolate-bowls', 'Chocolate Bowls', 'desserts'],
   ['loaded-fries', 'Loaded Fries', 'fries'],
   ['cheese-garlic-bun', 'Cheese Garlic Bun', 'sides'],
   ['sandwiches', 'Sandwiches', 'sandwiches'],
-  ['menu-sandwich-pasta-burgers', 'Sandwich · Pasta · Burgers', 'sandwiches'],
-  ['menu-maggi-fries-sides', 'Maggi · Fries · Sides', 'maggi'],
-  ['menu-rolls-pulav', 'Rolls · Tava Pulav & Rice', 'rolls'],
-  ['menu-desserts', 'Desserts & Ice Cream', 'desserts'],
-  ['menu-tea-coffee-mojito', 'Tea · Coffee · Mojito', 'tea'],
 ];
-const posterSize = (f) => (f === 'menu-maggi-fries-sides' || f === 'menu-tea-coffee-mojito' ? [1280, 853] : [900, 1350]);
+const posterSize = () => [900, 1350];
 const CAT_EMOJI = { rolls: '🌯', 'tava pulav & rice': '🍛', sandwiches: '🥪', pasta: '🍝', burgers: '🍔', maggi: '🍜', fries: '🍟', sides: '🧀', desserts: '🍰', 'ice cream': '🍦', tea: '🍵', coffee: '☕', mojito: '🍹' };
 const emoji = (c) => CAT_EMOJI[c.name.toLowerCase()] || '🍽️';
 const RIBBON = ['Good Food', 'Good Mood', 'Sip', 'Relax', 'Repeat', 'Freshly Made with Love', 'Good Food Always'];
@@ -104,21 +99,20 @@ function offersSection() {
 
 function bestSellers() {
   return `<section class="best" id="best"><div class="best-h"><div class="kick">Loved by everyone</div>
-    <h2><span class="st">✦</span> Our Best Sellers <span class="st">✦</span></h2><p>Swipe through our favourites · tap a poster to see it big</p></div>
+    <h2><span class="st">✦</span> Our Best Sellers <span class="st">✦</span></h2><p>Swipe for more · tap a poster to see it big</p></div>
     <div class="rail-wrap"><button class="railbtn l" data-rail="-1" aria-label="Previous">‹</button><button class="railbtn r" data-rail="1" aria-label="Next">›</button>
     <div class="rail" id="rail">${POSTERS.map(([f, t], i) => { const [w, h] = posterSize(f);
-      return `<button class="poster" data-poster="${i}" aria-label="${esc(t)}"><span class="badge2">★ ${i < 8 ? 'Best Seller' : 'Menu'}</span><img src="/img/posters/${f}.webp" alt="${esc(t)}" width="${w}" height="${h}" ${i > 2 ? 'loading="lazy"' : ''} decoding="async"></button>`; }).join('')}</div></div></section>`;
+      return `<div class="slide"><button class="poster" data-poster="${i}" aria-label="${esc(t)}"><span class="badge2">★ Best Seller</span><img src="/img/posters/${f}.webp" alt="${esc(t)}" width="${w}" height="${h}" ${i > 0 ? 'loading="lazy"' : ''} decoding="async"></button></div>`; }).join('')}</div></div>
+    <div class="dots" id="dots">${POSTERS.map((_, i) => `<button class="dt ${i ? '' : 'on'}" data-slide="${i}" aria-label="Poster ${i + 1}"></button>`).join('')}</div></section>`;
 }
 
 function highlights(s, cats) {
   const owner = esc(s.ownerName || 'Akshay Khaire');
-  return `<section class="hl"><h2>Café Highlights</h2><div class="hlgrid">
-    <div class="hlc owner"><span class="ic">👨‍🍳</span><div><small>Café owner</small><b>${owner}</b><small>Welcome to Magic Brew – we hope every visit feels a little magical.</small></div></div>
-    <div class="hlc p1"><span class="ic">🍽️</span><b>${menu.items.length} treats</b><small>Across ${cats.length} categories, from chai to sizzlers.</small></div>
-    <div class="hlc p2"><span class="ic">💛</span><b>Made with love</b><small>Freshly made, just for you.</small></div>
-    <div class="hlc p3"><span class="ic">☕</span><b>Sip · Relax · Repeat</b><small>Good food, good mood.</small></div>
-    <div class="hlc p4"><span class="ic">📱</span><b>Order from your phone</b><small>Add to cart, place your order${s.hasUpi ? ' and pay with UPI' : ''}.</small></div>
-  </div></section>`;
+  return `<section class="hl" aria-label="Café highlights"><div class="hlstrip">
+    <span class="hlc owner"><span class="ic">👨‍🍳</span><span><small>Café owner</small><b>${owner}</b></span></span>
+    <span class="hlc"><span class="ic">🍽️</span><span><b>${menu.items.length} treats</b><small>${cats.length} categories</small></span></span>
+    <span class="hlc"><span class="ic">💛</span><span><b>Made with love</b><small>Fresh, just for you</small></span></span>
+    <span class="hlc"><span class="ic">📱</span><span><b>Order on phone</b><small>${s.hasUpi ? 'Pay with UPI' : 'Quick &amp; easy'}</small></span></span></div></section>`;
 }
 
 function menuView() {
@@ -131,6 +125,7 @@ function menuView() {
     <h1>${esc(s.cafeName)}</h1><p class="tag2">${esc(s.tagline)}</p>
     <div class="cta"><a href="#" class="gold" data-jump="menu-start">Explore the menu ↓</a><a href="#" class="line2" data-jump="best">★ Best sellers</a>${track}</div></div>
   <div class="ribbon" aria-hidden="true"><div>${rib}${rib}</div></div>
+  <nav class="catnav" aria-label="Menu categories"><div class="catnav-h">What are you craving?</div><div class="catchips">${cats.map((c) => `<button class="cchip" data-cat="${c.id}"><span>${emoji(c)}</span>${esc(c.name)}</button>`).join('')}</div></nav>
   <main>${offersSection()}${bestSellers()}${highlights(s, cats)}</main>
   <div class="searchbox" id="menu-start"><input id="q" type="search" placeholder="Search the menu…" aria-label="Search the menu" autocomplete="off"></div>
   <div class="tabs" id="tabs">${cats.map((c) => `<button class="tab ${activeCat === c.id ? 'on' : ''}" data-cat="${c.id}">${emoji(c)} ${esc(c.name)}</button>`).join('')}</div>
@@ -147,6 +142,11 @@ let observers = [];
 function afterMenu() {
   observers.forEach((o) => o.disconnect());
   observers = [];
+  const rail = document.getElementById('rail');
+  if (rail) rail.addEventListener('scroll', () => {
+    const i = Math.round(rail.scrollLeft / rail.clientWidth);
+    document.querySelectorAll('#dots .dt').forEach((d, k) => d.classList.toggle('on', k === i));
+  }, { passive: true });
   const cards = [...document.querySelectorAll('.card.rv')];
   if (!('IntersectionObserver' in window)) { cards.forEach((c) => c.classList.add('in')); return; }
   const rv = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); rv.unobserve(e.target); } }), { rootMargin: '0px 0px -6% 0px' });
@@ -250,10 +250,18 @@ async function placeOrder() {
     localStorage.setItem('cname', form.name);
     localStorage.setItem('cmobile', form.mobile);
     localStorage.setItem('lastOrder', d.order.id);
+    localStorage.setItem('lastOrderTok', d.order.token || '');
     order = d.order; cart = {}; saveCart(); window.__wa = d;
     go('confirm');
+    // straight to WhatsApp with the prepared message: the customer just taps Send
+    if (!d.whatsappSent && d.whatsappLink) setTimeout(() => { if (view === 'confirm') location.href = d.whatsappLink; }, 350);
   } catch (e) { $app.innerHTML = detailsView(e.message); }
 }
+
+// the customer's private link to this order's status + bill (works later, from any device)
+const orderLink = (o) => `${location.origin}/?o=${o.id}&t=${encodeURIComponent(o.token || '')}`;
+const tq = () => '?t=' + encodeURIComponent(order.token || localStorage.getItem('lastOrderTok') || '');
+function revealOrderLinks() { const el = document.getElementById('after'); if (el && el.hidden) { el.hidden = false; document.getElementById('opening')?.remove(); } }
 
 function orderSummary(o) {
   return `<div class="panel">${o.items.map((i) => `<div class="line"><span>${i.qty} × ${esc(i.name)}</span><span>${cur()}${i.price * i.qty}</span></div>`).join('')}
@@ -264,16 +272,21 @@ const waBtn = (href, label) =>
 
 function confirmView() {
   const d = window.__wa || {};
-  const wa = !d.whatsappSent && d.whatsappLink ? waBtn(d.whatsappLink, 'Send order to café on WhatsApp') : '';
-  return `<div class="page center"><div class="big">✅</div><h2>Order Placed!</h2><p>Order <b>#${order.id}</b> for ${esc(order.customer.name)}</p>
-  <div style="text-align:left">${orderSummary(order)}</div>${wa}
-  <button class="primary" data-go="pay">Pay the Bill · ${cur()}${order.total}</button>
-  <p><a href="#" data-go="status">View order status</a> · <a href="#" data-go="menu">Back to menu</a></p></div>`;
+  const needSend = !d.whatsappSent && d.whatsappLink;
+  if (view === 'confirm') setTimeout(revealOrderLinks, needSend ? 3500 : 600);   // a short delay, then the order link appears
+  return `<div class="page center"><div class="big">${needSend ? '💬' : '✅'}</div><h2>${needSend ? 'Almost there!' : 'Order Placed!'}</h2>
+  <p>Order <b>#${order.id}</b> for ${esc(order.customer.name)}</p>
+  ${needSend ? `<div class="panel hint2" id="opening"><b>Opening WhatsApp…</b><br>Just press <b>Send</b> in WhatsApp to place your order.</div>${waBtn(d.whatsappLink, 'Open WhatsApp again')}` : ''}
+  <div style="text-align:left">${orderSummary(order)}</div>
+  <div id="after" hidden><div class="panel" style="text-align:left"><b>Your order link</b><small style="display:block;color:var(--muted);margin:2px 0 8px">Keep it to check your order and pay the bill any time.</small>
+    <input readonly value="${esc(orderLink(order))}" onfocus="this.select()" style="font-size:.78rem"><button class="ghost" style="margin-top:8px" data-copy>Copy link</button></div>
+    <button class="primary" data-go="pay">Pay the Bill · ${cur()}${order.total}</button>
+    <p><a href="#" data-go="status">View order status</a> · <a href="#" data-go="menu">Back to menu</a></p></div></div>`;
 }
 
 async function payView() {
   $app.innerHTML = '<div class="page center"><p>Loading payment…</p></div>';
-  const p = await api(`/api/orders/${order.id}/pay`);
+  const p = await api(`/api/orders/${order.id}/pay${tq()}`);
   const qr = p.uploadedQr || p.qr;
   const body = qr
     ? `<img class="qrimg" src="${esc(qr)}" alt="Payment QR">
@@ -291,15 +304,15 @@ async function markPaid() {
   const btn = document.getElementById('paid');
   btn.disabled = true;
   try {
-    const d = await post(`/api/orders/${order.id}/payment`, { txnId: document.getElementById('txn').value });
+    const d = await post(`/api/orders/${order.id}/payment`, { txnId: document.getElementById('txn').value, t: order.token || localStorage.getItem('lastOrderTok') || '' });
     order = d.order; window.__wa = d;
     go('status');
   } catch (e) { alert(e.message); btn.disabled = false; }
 }
 
 async function statusView() {
-  try { order = (await api(`/api/orders/${order.id}`)).order; }
-  catch (e) { localStorage.removeItem('lastOrder'); return go('menu'); }
+  try { order = (await api(`/api/orders/${order.id}${tq()}`)).order; }
+  catch (e) { localStorage.removeItem('lastOrder'); localStorage.removeItem('lastOrderTok'); return go('menu'); }
   const d = window.__wa || {};
   const st = { new: 'Received', preparing: 'Being prepared 👨‍🍳', ready: 'Ready 🎉', completed: 'Completed', cancelled: 'Cancelled' }[order.status];
   const ps = order.payment.status;
@@ -309,7 +322,8 @@ async function statusView() {
   ${order.payment.txnId ? `<div class="line"><span>Transaction ID</span><span>${esc(order.payment.txnId)}</span></div>` : ''}</div>
   ${orderSummary(order)}
   ${ps === 'reported' && d.whatsappLink && !d.whatsappSent ? waBtn(d.whatsappLink, 'Send payment details to café on WhatsApp') : ''}
-  ${ps === 'unpaid' ? '<button class="primary" data-go="pay">Pay the Bill</button>' : ''}
+  ${ps === 'unpaid' ? `<button class="primary" data-go="pay">Pay the Bill · ${cur()}${order.total}</button>` : ''}
+  <button class="ghost" style="margin-top:10px" data-copy>🔗 Copy my order link</button>
   <button class="ghost" style="margin-top:10px" data-go="status">Refresh</button></div>`;
 }
 
@@ -332,12 +346,13 @@ document.addEventListener('click', (e) => {
     if (k === 'see') { const id = lb.dataset.target; closeLB(); return scrollToEl(document.getElementById(id)); }
   }
   if (e.target.id === 'totop') return window.scrollTo({ top: 0, behavior: 'smooth' });
-  const t = e.target.closest('[data-q],[data-go],[data-cat],[data-open],[data-track],[data-poster],[data-rail],[data-jump],#place,#paid');
+  const t = e.target.closest('[data-q],[data-go],[data-cat],[data-open],[data-track],[data-poster],[data-rail],[data-slide],[data-jump],[data-copy],#place,#paid');
   if (!t) return;
   if (t.dataset.q) return setQty(t.dataset.q, +t.dataset.d);
   if (t.dataset.open) return itemModal(t.dataset.open);
   if (t.dataset.poster !== undefined) return openLB(+t.dataset.poster);
-  if (t.dataset.rail) { const r = document.getElementById('rail'); return r.scrollBy({ left: +t.dataset.rail * r.clientWidth * 0.8, behavior: 'smooth' }); }
+  if (t.dataset.rail) { const r = document.getElementById('rail'); return r.scrollBy({ left: +t.dataset.rail * r.clientWidth, behavior: 'smooth' }); }
+  if (t.dataset.slide !== undefined) { const r = document.getElementById('rail'); return r.scrollTo({ left: +t.dataset.slide * r.clientWidth, behavior: 'smooth' }); }
   if (t.dataset.jump) { e.preventDefault(); return scrollToEl(document.getElementById(t.dataset.jump)); }
   if (t.dataset.cat) {
     const q = document.getElementById('q');
@@ -345,7 +360,12 @@ document.addEventListener('click', (e) => {
     setActive(t.dataset.cat);
     return scrollToEl(document.getElementById('cat-' + t.dataset.cat));
   }
-  if (t.dataset.track !== undefined) { e.preventDefault(); order = { id: localStorage.getItem('lastOrder') }; return go('status'); }
+  if (t.dataset.copy !== undefined) {
+    const link = orderLink({ id: order.id, token: order.token || localStorage.getItem('lastOrderTok') });
+    (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => { t.textContent = 'Copied ✓'; }, () => { prompt('Copy your order link:', link); });
+    return;
+  }
+  if (t.dataset.track !== undefined) { e.preventDefault(); order = { id: localStorage.getItem('lastOrder'), token: localStorage.getItem('lastOrderTok') || '' }; return go('status'); }
   if (t.dataset.go) { e.preventDefault(); return go(t.dataset.go); }
   if (t.id === 'place') return placeOrder();
   if (t.id === 'paid') return markPaid();
@@ -361,6 +381,19 @@ window.addEventListener('scroll', () => {
   const b = document.getElementById('totop');
   if (b) b.classList.toggle('show', window.scrollY > 900);
 }, { passive: true });
+
+// opened from a saved order link (?o=ID&t=TOKEN): go straight to that order's status + bill
+{
+  const qp = new URLSearchParams(location.search), oid = qp.get('o');
+  if (oid) {
+    localStorage.setItem('lastOrder', oid); localStorage.setItem('lastOrderTok', qp.get('t') || '');
+    order = { id: oid, token: qp.get('t') || '' }; view = 'status';
+    history.replaceState(null, '', location.pathname);
+  }
+}
+// back from WhatsApp: show the order link right away; keep the order status fresh
+document.addEventListener('visibilitychange', () => { if (!document.hidden && view === 'confirm') revealOrderLinks(); });
+setInterval(() => { if (view === 'status' && !document.hidden) statusView(); }, 20000);
 
 api('/api/menu')
   .then((m) => { menu = m; menuJson = JSON.stringify(m); document.title = m.settings.cafeName; render(); })

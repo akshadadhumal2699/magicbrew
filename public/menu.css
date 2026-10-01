@@ -217,3 +217,41 @@ html{background:var(--cream)}body.mb{min-height:100vh;background-attachment:fixe
 .ocard .ctl{margin-top:auto;display:block}
 .ocard .qty{justify-content:space-between;width:100%;background:#f6e6c8}
 .ocard .qty b{min-width:20px;text-align:center}
+
+/* ---------- CATEGORY QUICK-NAV (under the hero) ---------- */
+.catnav{max-width:760px;margin:14px auto 0;padding:0 12px}
+.catnav-h{font-family:var(--script);font-size:1.45rem;color:var(--brand2);text-align:center;line-height:1}
+.catchips{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:8px}
+.cchip{display:inline-flex;align-items:center;gap:5px;border:1px solid #e7b95a88;background:var(--paper);color:var(--brand2);font-weight:600;font-size:.8rem;padding:6px 11px;border-radius:99px;box-shadow:0 1px 4px #5a34200f;transition:transform .15s,background .2s}
+.cchip span{font-size:1rem}
+.cchip:active{transform:scale(.93);background:linear-gradient(180deg,#f7d98a,#d9a441)}
+@media(hover:hover){.cchip:hover{background:#fdf0c4}}
+
+/* ---------- BEST SELLERS: one poster at a time ---------- */
+.best{margin:16px 0 0;padding:14px 0 12px}
+.best-h h2{font-size:clamp(1.4rem,6vw,1.8rem)}
+.rail{gap:0;padding:12px 0 6px}
+.slide{flex:0 0 100%;display:flex;justify-content:center;scroll-snap-align:center;scroll-snap-stop:always}
+.poster{height:min(52vh,420px)}
+.poster:hover{transform:none!important}
+.dots{display:flex;justify-content:center;gap:7px;padding-top:4px}
+.dt{width:8px;height:8px;border-radius:99px;border:0;padding:0;background:#f6e7cf55;transition:all .25s var(--ease)}
+.dt.on{width:22px;background:#f3cf79}
+.railbtn.l{left:6px}.railbtn.r{right:6px}
+@media(max-width:759px){.railbtn{display:grid;place-items:center;width:34px;height:34px;opacity:.9}}
+
+/* ---------- HIGHLIGHTS: compact strip ---------- */
+.hl{margin:12px auto 0;padding:0}
+.hlstrip{display:flex;gap:8px;overflow-x:auto;padding:4px 16px 8px;scrollbar-width:none;scroll-snap-type:x proximity}
+.hlstrip::-webkit-scrollbar{display:none}
+.hlc{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 14px 8px 10px;border-radius:99px;background:var(--paper);box-shadow:0 2px 8px #5a342014;scroll-snap-align:start;white-space:nowrap}
+.hlc>span:last-child{display:flex;flex-direction:column;line-height:1.15}
+.hlc .ic{font-size:1.3rem;margin:0}
+.hlc b{margin:0;font-size:.8rem}
+.hlc small{margin:0;font-size:.68rem}
+.hlc.owner{background:linear-gradient(150deg,#3b1d0e,#5a2e18);grid-column:auto}
+.hlc.owner b{font-size:.9rem}
+.hlc.owner .ic{width:auto;height:auto;background:none;font-size:1.4rem}
+
+/* ---------- ORDER CONFIRM ---------- */
+.hint2{background:#fff8e1;border:1px dashed #d9a441;text-align:center;line-height:1.5}

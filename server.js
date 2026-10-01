@@ -48,6 +48,13 @@ let db = null, dirty = false;
 function ensureShape() {
   let changed = false;
   for (const k of ['offers', 'expenses']) if (!Array.isArray(db[k])) { db[k] = []; changed = true; }
+  // one-time: customer menu starts with these sections (owner can still reorder in Admin > Categories)
+  if (!db.catOrderV2) {
+    const FIRST = ['tea', 'coffee', 'fries', 'sides', 'burgers', 'pasta', 'sandwiches'];
+    const rank = (c) => { const i = FIRST.indexOf(c.name.toLowerCase()); return i < 0 ? 99 : i; };
+    [...db.categories].sort((a, b) => rank(a) - rank(b) || a.order - b.order).forEach((c, i) => (c.order = i));
+    db.catOrderV2 = true; changed = true;
+  }
   return changed;
 }
 async function loadDb() {
@@ -208,7 +215,7 @@ app.get('/api/menu', (req, res) => {
   res.json({ settings: publicSettings(), categories, items });
 });
 
-function orderText(o, s) {
+function orderText(o, s, link) {
   const lines = o.items.map((i) => `${i.qty} × ${i.name} – ${s.currency}${i.price * i.qty}`);
   return [
     `*New Order #${o.id}*`,
@@ -218,9 +225,10 @@ function orderText(o, s) {
     '', ...lines, '',
     `*Total: ${s.currency}${o.total}*`,
     `Time: ${new Date(o.createdAt).toLocaleString('en-IN')}`,
+    link ? `Order link: ${link}` : null,
   ].filter((x) => x !== null).join('\n');
 }
-function paymentText(o, s) {
+function paymentText(o, s, link) {
   const lines = o.items.map((i) => `${i.qty} × ${i.name}`);
   return [
     `*Payment ${o.payment.status === 'paid' ? 'Received' : 'Reported'} – Order #${o.id}*`,
@@ -230,8 +238,20 @@ function paymentText(o, s) {
     `Total Bill: ${s.currency}${o.total}`,
     `Payment Status: ${o.payment.status === 'paid' ? 'Paid' : 'Paid (awaiting owner verification)'}`,
     `Transaction ID: ${o.payment.txnId || 'Not provided'}`,
+    ...(link ? ['', `Order link: ${link}`] : []),
   ].join('\n');
 }
+// private link the customer can reopen later: status + bill + pay
+function siteUrl(req) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  return (db.settings.publicUrl || (/^(localhost|127\.|\[::1\])/.test(host) ? `http://${host}` : `https://${host}`)).replace(/\/$/, '');
+}
+const orderLink = (req, o) => `${siteUrl(req)}/?o=${o.id}&t=${o.token}`;
+// orders created since tokens were added need the token; older orders stay open by id
+const orderFor = (req) => {
+  const o = db.orders.find((x) => x.id === +req.params.id);
+  return o && (!o.token || o.token === String(req.query.t || (req.body && req.body.t) || '')) ? o : null;
+};
 const waLink = (text) => `https://wa.me/${db.settings.ownerWhatsApp.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
 
 // Sends automatically if Cloud API creds are configured; otherwise the client/admin uses the wa.me link.
@@ -265,7 +285,7 @@ app.post('/api/orders', async (req, res) => {
     lines.push({ id: it.id, name: it.name, price: effectivePrice(it), qty });
   }
   const order = {
-    id: db.nextOrderId++, customer: { name: cleanName, mobile: cleanMobile },
+    id: db.nextOrderId++, token: crypto.randomBytes(6).toString('hex'), customer: { name: cleanName, mobile: cleanMobile },
     notes: String(notes || '').trim().slice(0, 200), items: lines,
     total: lines.reduce((s, l) => s + l.price * l.qty, 0),
     status: 'new', payment: { status: 'unpaid', txnId: '' },
@@ -273,20 +293,20 @@ app.post('/api/orders', async (req, res) => {
   };
   db.orders.unshift(order);
   save();
-  const text = orderText(order, db.settings);
+  const text = orderText(order, db.settings, orderLink(req, order));
   const sent = await sendWhatsApp(text);
   res.json({ order, whatsappSent: sent, whatsappLink: db.settings.ownerWhatsApp ? waLink(text) : null });
 });
 
 app.get('/api/orders/:id', (req, res) => {
-  const o = db.orders.find((x) => x.id === +req.params.id);
+  const o = orderFor(req);
   if (!o) return res.status(404).json({ error: 'Order not found' });
   res.json({ order: o });
 });
 
 // Payment info for an order: UPI deep link (amount pre-filled) + QR
 app.get('/api/orders/:id/pay', async (req, res) => {
-  const o = db.orders.find((x) => x.id === +req.params.id);
+  const o = orderFor(req);
   if (!o) return res.status(404).json({ error: 'Order not found' });
   const s = db.settings;
   let upiLink = null, qr = null;
@@ -298,12 +318,12 @@ app.get('/api/orders/:id/pay', async (req, res) => {
 });
 
 app.post('/api/orders/:id/payment', async (req, res) => {
-  const o = db.orders.find((x) => x.id === +req.params.id);
+  const o = orderFor(req);
   if (!o) return res.status(404).json({ error: 'Order not found' });
   if (o.payment.status === 'paid') return res.json({ order: o });
   o.payment = { status: 'reported', txnId: String(req.body.txnId || '').trim().slice(0, 40), reportedAt: new Date().toISOString() };
   save();
-  const text = paymentText(o, db.settings);
+  const text = paymentText(o, db.settings, o.token && orderLink(req, o));
   const sent = await sendWhatsApp(text);
   res.json({ order: o, whatsappSent: sent, whatsappLink: db.settings.ownerWhatsApp ? waLink(text) : null });
 });
@@ -457,7 +477,8 @@ admin.put('/orders/:id', (req, res) => {
 admin.get('/orders/:id/whatsapp', (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
-  res.json({ order: waLink(orderText(o, db.settings)), payment: waLink(paymentText(o, db.settings)) });
+  const link = o.token && orderLink(req, o);
+  res.json({ order: waLink(orderText(o, db.settings, link)), payment: waLink(paymentText(o, db.settings, link)) });
 });
 
 // QR code that customers scan to open the menu
