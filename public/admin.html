@@ -8,8 +8,6 @@ body{padding-bottom:30px}
 .top{background:var(--brand2);color:var(--gold);padding:14px 16px;display:flex;justify-content:space-between;align-items:center}
 .nav{display:flex;gap:6px;overflow-x:auto;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 .wrap{max-width:900px;margin:0 auto;padding:16px}
-.kb{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin:10px 0}.kb button{padding:10px 0;font-size:1rem;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--brand);font-weight:600}
-.kb button.w{grid-column:span 2}.kb button:active{background:#f1e4d0}
 .masked{-webkit-text-security:disc;text-security:disc}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:560px){.two{grid-template-columns:1fr}}
@@ -20,15 +18,11 @@ body{padding-bottom:30px}
 .thumb{width:56px;height:56px;border-radius:10px;background:#f1e4d0 center/cover;flex:none;display:flex;align-items:center;justify-content:center}
 .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .new{border-left:4px solid var(--gold)}
-.hl{outline:3px solid #e8a317;box-shadow:0 0 0 6px #e8a31733;animation:pulse 1.4s ease-in-out 4}
-@keyframes pulse{50%{box-shadow:0 0 0 12px #e8a31700}}
-.sm.cur{background:var(--brand);color:#fff;cursor:default}
 pre{white-space:pre-wrap;background:#f4e9d8;padding:10px;border-radius:10px;font-size:.8rem}
 </style></head><body>
 <div id="root"></div>
 <script>
 const R = document.getElementById('root');
-let focusOrder = +new URLSearchParams(location.search).get('order') || 0, seenMax = null;
 let token = localStorage.getItem('tok'), S = null, tab = 'dashboard', editing = null, toast = '';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function api(url, opt = {}) {
@@ -68,39 +62,7 @@ function renderLogin(err = '') {
 function renderPasswordLogin(err = '') {
   R.innerHTML = `<div class="page" style="margin-top:12vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad)">${esc(err)}</p>
   <input id="pw" type="text" class="masked" placeholder="Admin password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus>
-  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="ghost" id="kbt" type="button">⌨️ Use on-screen keyboard (no typing)</button><div id="kb"></div><br><button class="primary" id="login">Log in</button>
-  <p><a href="#" id="otp">Forgot password? Email me a login code</a></p><div id="otpbox"></div></div></div>`;
-  document.getElementById('otp').onclick = async (e) => {
-    e.preventDefault();
-    const box = document.getElementById('otpbox'); box.textContent = 'Sending…';
-    const r = await fetch('/api/admin/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) { box.innerHTML = '<p style="color:var(--bad)">' + esc(d.error || 'Failed') + '</p>'; return; }
-    box.innerHTML = '<p>Code sent to ' + esc(d.hint) + '</p><input id="otpc" inputmode="numeric" maxlength="8" placeholder="8-digit code"><br><br><button class="primary" id="otpgo">Verify &amp; log in</button><p id="otperr" style="color:var(--bad)"></p>';
-    document.getElementById('otpgo').onclick = async () => {
-      const v = await fetch('/api/admin/otp/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge: d.challenge, code: document.getElementById('otpc').value }) });
-      const j = await v.json().catch(() => ({}));
-      if (!v.ok) return (document.getElementById('otperr').textContent = j.error || 'Failed');
-      token = j.token; localStorage.setItem('tok', token); refresh();
-    };
-  };
-  document.getElementById('kbt').onclick = () => {
-    const kb = document.getElementById('kb'), pw = document.getElementById('pw');
-    if (kb.innerHTML) { kb.innerHTML = ''; return; }
-    let caps = false;
-    const rows = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
-    const draw = () => {
-      kb.innerHTML = '<div class="kb">' + rows.join('').split('').map((c) => `<button type="button" data-k="${caps ? c.toUpperCase() : c}">${caps ? c.toUpperCase() : c}</button>`).join('') +
-        '<button type="button" class="w" data-k="CAPS">⇧ Aa</button><button type="button" class="w" data-k="DEL">⌫</button><button type="button" class="w" data-k="CLR">Clear</button></div>';
-      pw.classList.remove('masked');
-    };
-    kb.onclick = (e) => {
-      const k = e.target.dataset && e.target.dataset.k; if (!k) return;
-      if (k === 'CAPS') { caps = !caps; return draw(); }
-      pw.value = k === 'DEL' ? pw.value.slice(0, -1) : k === 'CLR' ? '' : pw.value + k;
-    };
-    pw.readOnly = true; draw();
-  };
+  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="primary" id="login">Log in</button></div></div>`;
   fetch('/api/admin/local-login').then((r) => r.json()).then((d) => {
     if (!d.available) return;
     const b = document.createElement('button');
@@ -112,7 +74,7 @@ function renderPasswordLogin(err = '') {
   document.getElementById('pw').focus();
   const doLogin = async () => {
     const r = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value }) });
-    if (!r.ok) return renderPasswordLogin('Wrong password');
+    if (!r.ok) return renderLogin('Wrong password');
     token = (await r.json()).token; localStorage.setItem('tok', token); refresh();
   };
   document.getElementById('login').onclick = doLogin;
@@ -122,45 +84,21 @@ function renderPasswordLogin(err = '') {
 async function refresh(quiet) {
   if (!token) return renderLogin();
   S = await api('/state');
-  const maxId = S.orders.reduce((m, o) => Math.max(m, o.id), 0);
-  if (seenMax !== null && maxId > seenMax) { focusOrder = maxId; tab = 'orders'; chime(); }
-  seenMax = maxId;
   if (!quiet || !['menu', 'settings'].includes(tab) || !editing) draw();
 }
 
 const TABS = [['dashboard', 'Dashboard'], ['orders', 'Orders'], ['menu', 'Menu'], ['categories', 'Categories'], ['payments', 'Payments'], ['qr', 'Café QR'], ['settings', 'Settings']];
 function draw() {
   const pend = S.orders.filter((o) => o.status === 'new').length;
-  R.innerHTML = `<div class="top"><b style="font-family:'Playfair Display'">${esc(S.settings.cafeName)} · Admin</b><span><button class="sm" id="mute">${muted ? '🔇 Alarm off' : '🔊 Alarm on'}</button> <button class="sm" id="logout">Log out</button></span></div>
+  R.innerHTML = `<div class="top"><b style="font-family:'Playfair Display'">${esc(S.settings.cafeName)} · Admin</b><button class="sm" id="logout">Log out</button></div>
   <div class="nav">${TABS.map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}${k === 'orders' && pend ? ` (${pend})` : ''}</button>`).join('')}</div>
-  ${pend ? `<div style="background:#c0392b;color:#fff;padding:10px 16px;font-weight:600;text-align:center">🚨 ${pend} new order${pend > 1 ? 's' : ''} waiting — tap Accepted to stop the alarm</div>` : ''}
   <div class="wrap" id="body"></div>`;
-  keepAwake();
-  document.getElementById('mute').onclick = () => { muted = !muted; localStorage.setItem('mute', muted ? '1' : '0'); draw(); if (!muted) alarm(); };
   document.getElementById('logout').onclick = () => { localStorage.removeItem('tok'); token = null; renderLogin(); };
   document.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; draw(); }));
   const body = document.getElementById('body');
   body.innerHTML = { dashboard, orders, menu, categories, payments, qr, settings }[tab]();
   bind[tab] && bind[tab](body);
-  const hl = body.querySelector('.hl');
-  if (hl) hl.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
-let actx = null, muted = localStorage.getItem('mute') === '1';
-document.addEventListener('click', () => { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch {} }, { capture: true });
-// Loud siren: alternating two-tone, ~3 seconds
-function alarm() {
-  if (muted || !actx || actx.state !== 'running') return;
-  const t0 = actx.currentTime, g = actx.createGain(); g.connect(actx.destination);
-  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.9, t0 + 0.05); g.gain.setValueAtTime(0.9, t0 + 2.8); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 3);
-  for (let k = 0; k < 6; k++) { const o = actx.createOscillator(); o.type = 'square'; o.frequency.value = k % 2 ? 660 : 990; o.connect(g); o.start(t0 + k * 0.5); o.stop(t0 + k * 0.5 + 0.5); }
-  if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]);
-}
-function chime() { alarm(); }
-// Keep ringing every 6s while any order is still "New Order"; stops when the owner accepts it (or mutes)
-setInterval(() => { if (token && S && S.orders.some((o) => o.status === 'new')) alarm(); }, 6000);
-let wl = null;
-async function keepAwake() { try { if (navigator.wakeLock && !wl) { wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', () => (wl = null)); } } catch {} }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) keepAwake(); });
 
 /* ---------- Dashboard ---------- */
 function dashboard() {
@@ -168,30 +106,32 @@ function dashboard() {
   const paid = today.filter((o) => o.payment.status === 'paid');
   return `<div class="stats"><div class="stat"><b>${today.length}</b>Orders today</div><div class="stat"><b>${cur()}${today.reduce((s, o) => s + o.total, 0)}</b>Order value</div>
   <div class="stat"><b>${cur()}${paid.reduce((s, o) => s + o.total, 0)}</b>Paid (verified)</div><div class="stat"><b>${S.orders.filter((o) => o.status === 'new').length}</b>New orders</div></div>
-  ${!S.whatsappApi ? '<div class="panel err">⚠️ WhatsApp is not connected yet (see README) — new orders still appear here.</div>' : !S.settings.ownerMobile ? '<div class="panel err">⚠️ Set the owner WhatsApp number in Settings.</div>' : ''}
+  ${!S.settings.ownerWhatsApp ? '<div class="panel err">⚠️ Set your WhatsApp number in Settings to receive order notifications.</div>' : ''}
   ${!S.settings.upiId && !S.settings.paymentQrImage ? '<div class="panel err">⚠️ Add your UPI ID or payment QR in Settings so customers can pay.</div>' : ''}
   <h3>Latest orders</h3>${S.orders.slice(0, 5).map(orderCard).join('') || '<p>No orders yet.</p>'}`;
 }
 
 /* ---------- Orders ---------- */
-const STAT = ['new', 'accepted', 'preparing', 'ready', 'completed', 'cancelled'];
-const STAT_LABEL = { new: 'New Order', accepted: 'Accepted', preparing: 'Preparing', ready: 'Ready', completed: 'Completed', cancelled: 'Cancelled' };
+const STAT = ['new', 'preparing', 'ready', 'completed', 'cancelled'];
 function orderCard(o) {
   const pb = o.payment.status === 'paid' ? '<span class="badge ok">Paid ✓</span>' : o.payment.status === 'reported' ? '<span class="badge" style="background:#fff3cd">Customer says paid — verify</span>' : '<span class="badge">Unpaid</span>';
-  return `<div class="panel ${o.status === 'new' ? 'new' : ''} ${o.id === focusOrder ? 'hl' : ''}" id="o${o.id}"><div class="row"><b>#${o.id} · ${esc(o.customer.name)}</b><span class="total">${cur()}${o.total}</span></div>
-  <small>${fdate(o.createdAt)} · <a href="tel:${esc(o.customer.mobile)}">${esc(o.customer.mobile)}</a></small><div style="margin:6px 0">${o.items.map((i) => `<div class="line"><span>${i.qty} × ${esc(i.name)}</span><span>${cur()}${i.price * i.qty}</span></div>`).join('')}</div>
+  return `<div class="panel ${o.status === 'new' ? 'new' : ''}"><div class="row"><b>#${o.id} · ${esc(o.customer.name)}</b><span class="total">${cur()}${o.total}</span></div>
+  <small>${fdate(o.createdAt)} · ${esc(o.customer.mobile)}</small><div style="margin:6px 0">${o.items.map((i) => `${i.qty} × ${esc(i.name)}`).join(', ')}</div>
   ${o.notes ? `<small>📝 ${esc(o.notes)}</small><br>` : ''}
-  <span class="badge">${STAT_LABEL[o.status]}</span> ${pb} ${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}
-  <div class="acts">${STAT.map((s) => s === o.status ? `<button class="sm cur">${STAT_LABEL[s]}</button>` : `<button class="sm ${s === 'cancelled' ? 'danger' : ''}" data-os="${o.id}" data-s="${s}">${STAT_LABEL[s]}</button>`).join('')}
+  <span class="badge">${o.status}</span> ${pb} ${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}
+  <div class="acts">${STAT.filter((s) => s !== o.status).map((s) => `<button class="sm" data-os="${o.id}" data-s="${s}">${s}</button>`).join('')}
   ${o.payment.status !== 'paid' ? `<button class="sm fill" data-pay="${o.id}">Mark paid</button>` : ''}
-  <button class="sm" data-wa="${o.id}">Resend to WhatsApp</button>
-</div></div>`;
+  <button class="sm" data-wa="${o.id}">WhatsApp</button></div></div>`;
 }
 function orders() { return `<h3>All orders</h3>${S.orders.map(orderCard).join('') || '<p>No orders yet.</p>'}`; }
 function bindOrders(b) {
   b.querySelectorAll('[data-os]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.os, { method: 'PUT', json: { status: x.dataset.s } }); refresh(); }));
-  b.querySelectorAll('[data-wa]').forEach((x) => (x.onclick = async () => { x.disabled = true; const d = await api(`/orders/${x.dataset.wa}/notify`, { method: 'POST' }); x.disabled = false; x.textContent = d.sent ? 'Sent ✓' : 'Failed: ' + (d.why[0] || '').slice(0, 60); }));
   b.querySelectorAll('[data-pay]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.pay, { method: 'PUT', json: { paymentStatus: 'paid' } }); refresh(); }));
+  b.querySelectorAll('[data-wa]').forEach((x) => (x.onclick = async () => {
+    const l = await api(`/orders/${x.dataset.wa}/whatsapp`);
+    const o = S.orders.find((z) => z.id === +x.dataset.wa);
+    window.open(o.payment.status === 'unpaid' ? l.order : l.payment, '_blank');
+  }));
 }
 
 /* ---------- Menu ---------- */
@@ -286,8 +226,8 @@ function settings() {
   const s = S.settings;
   return `<h3>Settings</h3><div class="panel"><label>Café name</label><input id="s-cafeName" value="${esc(s.cafeName)}"><label>Tagline</label><input id="s-tagline" value="${esc(s.tagline)}">
   <label>Public menu URL (for the QR code, e.g. https://menu.magicbrew.in)</label><input id="s-publicUrl" value="${esc(s.publicUrl)}"></div>
-  <div class="panel"><b>Order messages on WhatsApp</b><label>Owner WhatsApp number (10 digits, or with country code) — every new order is sent to this one chat</label><input id="s-ownerMobile" value="${esc(s.ownerMobile)}" inputmode="numeric">
-  <div class="acts"><button class="sm" id="watest">Send test message</button></div><small id="wamsg" style="color:var(--muted)">${S.whatsappApi ? '✅ WhatsApp is connected.' : 'WhatsApp is not connected: add WHATSAPP_TOKEN and WHATSAPP_PHONE_ID on the server (see README).'}</small></div>
+  <div class="panel"><b>WhatsApp notifications</b><label>Owner/chef WhatsApp number (with country code, e.g. 919876543210)</label><input id="s-ownerWhatsApp" value="${esc(s.ownerWhatsApp)}" inputmode="numeric">
+  <small style="color:var(--muted)">${S.whatsappApi ? '✅ WhatsApp Cloud API is configured — messages are sent automatically.' : 'Cloud API not configured: customers get a “Send on WhatsApp” button that opens a pre-filled message to this number. See README to enable fully automatic sending.'}</small></div>
   <div class="panel"><b>Payment</b><label>UPI ID (e.g. magicbrew@okhdfc)</label><input id="s-upiId" value="${esc(s.upiId)}"><label>Payee name</label><input id="s-upiName" value="${esc(s.upiName)}">
   <small style="color:var(--muted)">A QR with the exact bill amount is generated per order from your UPI ID.</small>
   <label>Or upload your own bank/UPI QR image (overrides the generated QR)</label><input type="file" id="s-qr" accept="image/*">
@@ -295,9 +235,8 @@ function settings() {
   <button class="primary" id="s-save">Save settings</button>`;
 }
 function bindSettings(b) {
-  b.querySelector('#watest').onclick = async () => { const m = b.querySelector('#wamsg'); m.textContent = 'Sending…'; const d = await api('/whatsapp-test', { method: 'POST' }); m.textContent = d.sent ? '✅ Sent — check the WhatsApp chat.' : 'Not sent: ' + (d.why.join('; ') || 'unknown'); };
   b.querySelector('#s-save').onclick = async () => {
-    const json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerMobile', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
+    const json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerWhatsApp', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
     await api('/settings', { method: 'PUT', json });
     const f = b.querySelector('#s-qr').files[0];
     if (f) { const fd = new FormData(); fd.append('image', f); await api('/settings/payment-qr', { method: 'POST', body: fd }); }
@@ -307,17 +246,8 @@ function bindSettings(b) {
 }
 const bind = { orders: bindOrders, dashboard: bindOrders, payments: bindOrders, menu: bindMenu, categories: bindCategories, qr: bindQr, settings: bindSettings };
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});   // clean up the old push worker
 (async () => {
-  const qs = new URLSearchParams(location.search), osig = qs.get('sig');
-  if (osig && focusOrder) {
-    try {
-      const r = await fetch('/api/admin/order-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order: focusOrder, sig: osig }) });
-      if (r.ok) { token = (await r.json()).token; localStorage.setItem('tok', token); tab = 'orders'; }
-    } catch {}
-    history.replaceState(null, '', location.pathname);
-  } else if (focusOrder) tab = 'orders';
-  const key = qs.get('key');
+  const key = new URLSearchParams(location.search).get('key');
   if (key) {
     history.replaceState(null, '', location.pathname);   // don't leave the key in the address bar
     try {
@@ -328,5 +258,5 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().the
   refresh();
 })();
 // live order updates
-setInterval(() => { if (token && ['dashboard', 'orders', 'payments'].includes(tab)) refresh(true).catch(() => {}); }, 8000);
+setInterval(() => { if (token && ['dashboard', 'orders', 'payments'].includes(tab)) refresh(true).catch(() => {}); }, 15000);
 </script></body></html>

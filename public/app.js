@@ -232,7 +232,7 @@ async function placeOrder() {
     localStorage.setItem('cname', form.name);
     localStorage.setItem('cmobile', form.mobile);
     localStorage.setItem('lastOrder', d.order.id);
-    order = d.order; cart = {}; saveCart();
+    order = d.order; cart = {}; saveCart(); window.__wa = d;
     go('confirm');
   } catch (e) { $app.innerHTML = detailsView(e.message); }
 }
@@ -241,11 +241,14 @@ function orderSummary(o) {
   return `<div class="panel">${o.items.map((i) => `<div class="line"><span>${i.qty} × ${esc(i.name)}</span><span>${cur()}${i.price * i.qty}</span></div>`).join('')}
   <div class="line total"><span>Total</span><span>${cur()}${o.total}</span></div></div>`;
 }
+const waBtn = (href, label) =>
+  `<a class="ghost" style="display:block;text-align:center;text-decoration:none;margin-bottom:10px" href="${esc(href)}" target="_blank" rel="noopener">📲 ${label}</a>`;
 
 function confirmView() {
+  const d = window.__wa || {};
+  const wa = !d.whatsappSent && d.whatsappLink ? waBtn(d.whatsappLink, 'Send order to café on WhatsApp') : '';
   return `<div class="page center"><div class="big">✅</div><h2>Order Placed!</h2><p>Order <b>#${order.id}</b> for ${esc(order.customer.name)}</p>
-  <p style="color:var(--muted)">The café has received your order and will start on it shortly.</p>
-  <div style="text-align:left">${orderSummary(order)}</div>
+  <div style="text-align:left">${orderSummary(order)}</div>${wa}
   <button class="primary" data-go="pay">Pay the Bill · ${cur()}${order.total}</button>
   <p><a href="#" data-go="status">View order status</a> · <a href="#" data-go="menu">Back to menu</a></p></div>`;
 }
@@ -271,7 +274,7 @@ async function markPaid() {
   btn.disabled = true;
   try {
     const d = await post(`/api/orders/${order.id}/payment`, { txnId: document.getElementById('txn').value });
-    order = d.order;
+    order = d.order; window.__wa = d;
     go('status');
   } catch (e) { alert(e.message); btn.disabled = false; }
 }
@@ -279,13 +282,15 @@ async function markPaid() {
 async function statusView() {
   try { order = (await api(`/api/orders/${order.id}`)).order; }
   catch (e) { localStorage.removeItem('lastOrder'); return go('menu'); }
-  const st = { new: 'Received', accepted: 'Accepted ✅', preparing: 'Being prepared 👨‍🍳', ready: 'Ready 🎉', completed: 'Completed', cancelled: 'Cancelled' }[order.status];
+  const d = window.__wa || {};
+  const st = { new: 'Received', preparing: 'Being prepared 👨‍🍳', ready: 'Ready 🎉', completed: 'Completed', cancelled: 'Cancelled' }[order.status];
   const ps = order.payment.status;
   $app.innerHTML = `<div class="page"><button class="back" data-go="menu">← Menu</button><h2>Order #${order.id}</h2>
   <div class="panel"><div class="line"><span>Order status</span><span class="badge">${st}</span></div>
   <div class="line"><span>Payment</span><span class="badge ${ps === 'paid' ? 'ok' : ''}">${ps === 'paid' ? 'Paid ✓' : ps === 'reported' ? 'Awaiting café confirmation' : 'Unpaid'}</span></div>
   ${order.payment.txnId ? `<div class="line"><span>Transaction ID</span><span>${esc(order.payment.txnId)}</span></div>` : ''}</div>
   ${orderSummary(order)}
+  ${ps === 'reported' && d.whatsappLink && !d.whatsappSent ? waBtn(d.whatsappLink, 'Send payment details to café on WhatsApp') : ''}
   ${ps === 'unpaid' ? '<button class="primary" data-go="pay">Pay the Bill</button>' : ''}
   <button class="ghost" style="margin-top:10px" data-go="status">Refresh</button></div>`;
 }
@@ -344,9 +349,6 @@ api('/api/menu')
   .catch((e) => { $app.innerHTML = `<p class="err" style="padding:20px">Could not load menu: ${esc(e.message)}</p>`; });
 
 // Pick up owner menu changes without a manual reload (only re-renders when something actually changed)
-// Live order status: re-check every 10s while the status screen is open
-setInterval(() => { if (view === 'status' && order && order.id && !document.hidden) statusView(); }, 10000);
-
 setInterval(async () => {
   if (view === 'menu' && !document.querySelector('.modal, .lb')) {
     try {
