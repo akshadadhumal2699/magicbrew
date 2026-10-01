@@ -245,6 +245,10 @@ async function placeOrder() {
   const btn = document.getElementById('place');
   btn.disabled = true;
   btn.textContent = 'Placing…';
+  // Reserve a tab for WhatsApp right now (inside the tap, so it isn't popup-blocked). WhatsApp opens there and
+  // THIS page stays alive in the background to bring the customer back to their bill.
+  let waTab = null;
+  try { waTab = window.open('', '_blank'); } catch {}
   try {
     const d = await post('/api/orders', { ...form, cart: cartLines().map((l) => ({ id: l.it.id, qty: l.qty })) });
     localStorage.setItem('cname', form.name);
@@ -252,27 +256,32 @@ async function placeOrder() {
     localStorage.setItem('lastOrder', d.order.id);
     localStorage.setItem('lastOrderTok', d.order.token || '');
     order = d.order; cart = {}; saveCart(); window.__wa = d;
+    localStorage.setItem('justOrdered', Date.now());
     go('confirm');
     // straight to WhatsApp with the prepared message: the customer just taps Send
-    if (!d.whatsappSent && d.whatsappLink) setTimeout(() => { if (view === 'confirm') location.href = d.whatsappLink; }, 350);
-  } catch (e) { $app.innerHTML = detailsView(e.message); }
+    if (!d.whatsappSent && d.whatsappLink) {
+      if (waTab) waTab.location.href = d.whatsappLink;
+      else setTimeout(() => { if (view === 'confirm') location.href = d.whatsappLink; }, 350);   // popup blocked: same tab
+    } else if (waTab) waTab.close();
+  } catch (e) { if (waTab) waTab.close(); $app.innerHTML = detailsView(e.message); }
 }
 
 // the customer's private link to this order's status + bill (works later, from any device)
 const orderLink = (o) => `${location.origin}/?o=${o.id}&t=${encodeURIComponent(o.token || '')}`;
 const tq = () => '?t=' + encodeURIComponent(order.token || localStorage.getItem('lastOrderTok') || '');
-// after the order is sent the customer stays on this page for 10 seconds, then lands back on the menu
-let backTimer = null;
+// 5 seconds after ordering, bring the customer to their order page (bill + Pay button).
+// Uses a deadline, so it still fires on time if the browser throttles this page while WhatsApp is in front.
+let backTimer = null, backAt = 0;
 function startBackCountdown() {
   if (backTimer) return;
-  let n = 10;
+  backAt = Date.now() + 5000;
   const tick = () => {
-    const el = document.getElementById('cd');
-    if (view !== 'confirm' || !el) { clearInterval(backTimer); backTimer = null; return; }   // customer moved on (e.g. tapped Pay)
-    if (n <= 0) { clearInterval(backTimer); backTimer = null; location.href = '/'; return; }
-    el.textContent = `Taking you back to the menu in ${n}s…`; n--;
+    const el = document.getElementById('cd'), left = Math.ceil((backAt - Date.now()) / 1000);
+    if (view !== 'confirm') { clearInterval(backTimer); backTimer = null; return; }   // customer moved on (e.g. tapped Pay)
+    if (left <= 0) { clearInterval(backTimer); backTimer = null; localStorage.removeItem('justOrdered'); go('status'); return; }
+    if (el) el.textContent = `Taking you to your order & payment in ${left}s…`;
   };
-  tick(); backTimer = setInterval(tick, 1000);
+  tick(); backTimer = setInterval(tick, 500);
 }
 function revealOrderLinks() { const el = document.getElementById('after'); if (el && el.hidden) { el.hidden = false; document.getElementById('opening')?.remove(); } }
 
@@ -286,10 +295,10 @@ const waBtn = (href, label) =>
 function confirmView() {
   const d = window.__wa || {};
   const needSend = !d.whatsappSent && d.whatsappLink;
-  if (view === 'confirm') setTimeout(() => { revealOrderLinks(); if (!needSend) startBackCountdown(); }, needSend ? 3500 : 600);   // a short delay, then the order link appears
+  if (view === 'confirm') setTimeout(() => { revealOrderLinks(); startBackCountdown(); }, 0);
   return `<div class="page center"><div class="big">${needSend ? '💬' : '✅'}</div><h2>${needSend ? 'Almost there!' : 'Order Placed!'}</h2>
   <p>Order <b>#${order.id}</b> for ${esc(order.customer.name)}</p>
-  ${needSend ? `<div class="panel hint2" id="opening"><b>Opening WhatsApp…</b><br>Just press <b>Send</b> in WhatsApp to place your order.</div>${waBtn(d.whatsappLink, 'Open WhatsApp again')}` : ''}
+  ${needSend ? `<div class="panel hint2" id="opening"><b>Opening WhatsApp…</b><br>Press <b>Send</b> there. We'll bring you back to your bill in a few seconds.</div>${waBtn(d.whatsappLink, 'Open WhatsApp again')}` : ''}
   <div style="text-align:left">${orderSummary(order)}</div>
   <div id="after" hidden><div class="panel" style="text-align:left"><b>Your order link</b><small style="display:block;color:var(--muted);margin:2px 0 8px">Keep it to check your order and pay the bill any time.</small>
     <input readonly value="${esc(orderLink(order))}" onfocus="this.select()" style="font-size:.78rem"><button class="ghost" style="margin-top:8px" data-copy>Copy link</button></div>
@@ -414,6 +423,11 @@ window.addEventListener('scroll', () => {
 }
 // back from WhatsApp: show the order link right away; keep the order status fresh
 document.addEventListener('visibilitychange', () => { if (!document.hidden && view === 'confirm') { revealOrderLinks(); startBackCountdown(); } });
+// WhatsApp opened in this same tab (popup blocked) and the customer came back: go straight to their bill
+if (view === 'menu' && localStorage.getItem('lastOrder') && Date.now() - +(localStorage.getItem('justOrdered') || 0) < 180000) {
+  localStorage.removeItem('justOrdered');
+  order = { id: localStorage.getItem('lastOrder'), token: localStorage.getItem('lastOrderTok') || '' }; view = 'status';
+}
 setInterval(() => { if (view === 'status' && !document.hidden) statusView(); }, 20000);
 
 api('/api/menu')
