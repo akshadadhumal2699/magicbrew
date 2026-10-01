@@ -188,3 +188,32 @@ main{max-width:760px}
 }
 .logo,.foot img{height:auto}
 html{background:var(--cream)}body.mb{min-height:100vh;background-attachment:fixed}
+
+/* ---------- OFFERS (owner-managed, Admin > Offers) ---------- */
+.obadge{position:absolute;left:8px;top:8px;z-index:2;background:linear-gradient(180deg,#ec6a55,#c0392b);color:#fff;font-weight:700;font-size:.66rem;letter-spacing:.08em;border-radius:99px;padding:3px 10px;box-shadow:0 2px 8px #0004}
+.obadge.new{background:linear-gradient(180deg,#4a90d9,#2b6cb0)}
+.obadge.limited{background:linear-gradient(180deg,#a066c4,#7b3fa0)}
+.card .pill.has-off{background:#fff;color:#c0392b}
+.card .pill s,.mprice s{color:#9b8a7a;font-weight:500;font-size:.8em;margin-right:2px}
+.mprice b{color:#c0392b}
+.offers-sec{margin:24px 0 4px}
+.off-h{text-align:center}
+.off-h .kick{font-family:var(--script);font-size:1.3rem;color:var(--gold3)}
+.off-h h2{font-family:'Playfair Display',serif;font-size:clamp(1.4rem,6vw,1.8rem);color:var(--brand2);margin-top:-2px}
+.off-rail{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;padding:14px 4px 12px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.off-rail::-webkit-scrollbar{display:none}
+.ocard{flex:0 0 min(72vw,250px);scroll-snap-align:start;border-radius:20px;background:var(--paper);border:2px solid #e7b95a;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;margin:0 auto}
+.off-rail .ocard:only-child{flex-basis:min(100%,300px)}
+.ocard.off{opacity:.6}
+.ocard .ph{aspect-ratio:4/3}
+.ocard .ob{padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px;flex:1}
+.ocard .name{font-family:'Playfair Display',serif;font-weight:700;font-size:.98rem;color:var(--brand2);cursor:pointer}
+.ocard .desc{font-size:.76rem;color:var(--muted)}
+.oprice{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.oprice s{color:#9b8a7a;font-size:.9rem}
+.oprice b{color:#c0392b;font-size:1.45rem;line-height:1}
+.oprice em{font-style:normal;background:#e2f3e9;color:#2e8b57;font-weight:700;font-size:.7rem;border-radius:99px;padding:2px 8px;margin-left:auto}
+.ocard .until{font-size:.72rem;color:var(--muted)}
+.ocard .ctl{margin-top:auto;display:block}
+.ocard .qty{justify-content:space-between;width:100%;background:#f6e6c8}
+.ocard .qty b{min-width:20px;text-align:center}

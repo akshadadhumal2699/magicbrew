@@ -38,8 +38,13 @@ const CAT_EMOJI = { rolls: '🌯', 'tava pulav & rice': '🍛', sandwiches: '�
 const emoji = (c) => CAT_EMOJI[c.name.toLowerCase()] || '🍽️';
 const RIBBON = ['Good Food', 'Good Mood', 'Sip', 'Relax', 'Repeat', 'Freshly Made with Love', 'Good Food Always'];
 
+// price with the regular price struck through when the item has an active offer
+const priceHtml = (it) => it.origPrice ? `<s>${cur()}${it.origPrice}</s> <b>${cur()}${it.price}</b>` : `${cur()}${it.price}`;
+const badgeCls = (b) => (b === 'NEW' ? 'new' : b === 'LIMITED TIME' ? 'limited' : '');
+const offerBadge = (it) => it.offer ? `<span class="obadge ${badgeCls(it.offer.badge)}">${esc(it.offer.badge)}</span>` : '';
+
 const img = (it, cls = 'ph', pill = false) =>
-  `<div class="${cls}" data-open="${it.id}">🍽️${it.image ? `<img src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy" decoding="async" onerror="this.remove()">` : ''}${pill ? `<span class="pill">${cur()}${it.price}</span>` : ''}</div>`;
+  `<div class="${cls}" data-open="${it.id}">🍽️${it.image ? `<img src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy" decoding="async" onerror="this.remove()">` : ''}${offerBadge(it)}${pill ? `<span class="pill ${it.origPrice ? 'has-off' : ''}">${priceHtml(it)}</span>` : ''}</div>`;
 
 function setQty(id, d) {
   cart[id] = Math.max(0, (cart[id] || 0) + d);
@@ -84,6 +89,19 @@ function card(it, i) {
     <div class="row"><span class="ctl" data-ctl="${it.id}">${ctrl(it)}</span></div></div></div>`;
 }
 
+// active offers, set by the owner in Admin > Offers (the server already applied the offer price)
+function offersSection() {
+  const list = menu.items.filter((i) => i.offer);
+  if (!list.length) return '';
+  return `<section class="offers-sec" id="offers"><div class="off-h"><div class="kick">Limited · Special</div><h2>🎁 Today's Offers</h2></div>
+    <div class="off-rail">${list.map((it) => `<div class="ocard ${it.available ? '' : 'off'}">${img(it, 'ph')}
+      <div class="ob"><div class="name" data-open="${it.id}"><span>${esc(it.offer.title || it.name)}</span></div>
+      ${it.offer.title ? `<div class="desc">${esc(it.name)}</div>` : ''}
+      <div class="oprice"><s>${cur()}${it.origPrice}</s><b>${cur()}${it.price}</b><em>${Math.round((1 - it.price / it.origPrice) * 100)}% OFF</em></div>
+      ${it.offer.endDate ? `<div class="until">Till ${esc(new Date(it.offer.endDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }))}</div>` : ''}
+      <span class="ctl" data-ctl="${it.id}">${ctrl(it)}</span></div></div>`).join('')}</div></section>`;
+}
+
 function bestSellers() {
   return `<section class="best" id="best"><div class="best-h"><div class="kick">Loved by everyone</div>
     <h2><span class="st">✦</span> Our Best Sellers <span class="st">✦</span></h2><p>Swipe through our favourites · tap a poster to see it big</p></div>
@@ -113,7 +131,7 @@ function menuView() {
     <h1>${esc(s.cafeName)}</h1><p class="tag2">${esc(s.tagline)}</p>
     <div class="cta"><a href="#" class="gold" data-jump="menu-start">Explore the menu ↓</a><a href="#" class="line2" data-jump="best">★ Best sellers</a>${track}</div></div>
   <div class="ribbon" aria-hidden="true"><div>${rib}${rib}</div></div>
-  <main>${bestSellers()}${highlights(s, cats)}</main>
+  <main>${offersSection()}${bestSellers()}${highlights(s, cats)}</main>
   <div class="searchbox" id="menu-start"><input id="q" type="search" placeholder="Search the menu…" aria-label="Search the menu" autocomplete="off"></div>
   <div class="tabs" id="tabs">${cats.map((c) => `<button class="tab ${activeCat === c.id ? 'on' : ''}" data-cat="${c.id}">${emoji(c)} ${esc(c.name)}</button>`).join('')}</div>
   <main id="menu">${cats.map((c) => `<section class="sec" id="cat-${c.id}"><h2 class="sec-h"><span class="em">${emoji(c)}</span>${esc(c.name)}</h2><div class="grid">
@@ -193,7 +211,7 @@ function itemModal(id) {
   m.className = 'modal';
   m.innerHTML = `<div class="sheet">${img(it)}<div class="in"><h2>${esc(it.name)}</h2>
     <p style="color:var(--muted)">${esc(it.description) || 'Freshly prepared at Magic Brew.'}</p>
-    <div class="row" style="margin-top:14px"><span class="price" style="font-size:1.3rem">${cur()}${it.price}</span><span id="mc" data-ctl="${it.id}">${ctrl(it)}</span></div></div></div>`;
+    <div class="row" style="margin-top:14px"><span class="price mprice" style="font-size:1.3rem">${priceHtml(it)}</span><span id="mc" data-ctl="${it.id}">${ctrl(it)}</span></div></div></div>`;
   m.onclick = (e) => {
     if (e.target === m) return m.remove();
     const b = e.target.closest('[data-q]');

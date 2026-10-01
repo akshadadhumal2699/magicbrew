@@ -44,15 +44,22 @@ const redis = async (cmd) => {
 };
 
 let db = null, dirty = false;
+// older databases predate offers/expenses: add the empty lists
+function ensureShape() {
+  let changed = false;
+  for (const k of ['offers', 'expenses']) if (!Array.isArray(db[k])) { db[k] = []; changed = true; }
+  return changed;
+}
 async function loadDb() {
   if (process.env.VERCEL && !REMOTE) throw new Error('Database not connected: add Upstash Redis under Vercel > Storage and redeploy');
   if (REMOTE) {
     const raw = await redis(['GET', DB_KEY]);
     db = raw ? JSON.parse(raw) : seed();
-    if (!raw || applyMenu(db)) { dirty = true; await persist(); }
+    const menuChanged = applyMenu(db), shapeChanged = ensureShape();
+    if (!raw || menuChanged || shapeChanged) { dirty = true; await persist(); }
   } else if (!db) {
     const loaded = fs.existsSync(DATA_FILE) ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) : seed();
-    db = loaded; applyMenu(db); dirty = true; await persist();
+    db = loaded; applyMenu(db); ensureShape(); dirty = true; await persist();
   }
 }
 async function persist() {
@@ -181,9 +188,24 @@ const publicSettings = () => {
   return { cafeName, tagline, ownerName, currency, hasUpi: !!upiId, upiName, paymentQrImage };
 };
 
+// Hidden items/categories never reach customers. An active offer (not expired, cheaper than the
+// regular price) replaces the item's price everywhere customers see or pay it.
+const todayIST = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+const isHidden = (it) => !!it.hidden || !!(db.categories.find((c) => c.id === it.categoryId) || {}).hidden;
+function liveOffer(it) {
+  const o = db.offers.find((x) => x.itemId === it.id && x.active);
+  if (!o || (o.endDate && o.endDate < todayIST()) || !(o.offerPrice < it.price)) return null;
+  return o;
+}
+const effectivePrice = (it) => { const o = liveOffer(it); return o ? o.offerPrice : it.price; };
+
 app.get('/api/menu', (req, res) => {
-  const categories = [...db.categories].sort((a, b) => a.order - b.order);
-  res.json({ settings: publicSettings(), categories, items: db.items });
+  const categories = db.categories.filter((c) => !c.hidden).sort((a, b) => a.order - b.order).map(({ hidden, ...c }) => c);
+  const items = db.items.filter((i) => !isHidden(i)).map(({ hidden, ...it }) => {
+    const o = liveOffer(it);
+    return o ? { ...it, price: o.offerPrice, origPrice: it.price, offer: { badge: o.badge, title: o.title, endDate: o.endDate } } : it;
+  });
+  res.json({ settings: publicSettings(), categories, items });
 });
 
 function orderText(o, s) {
@@ -239,8 +261,8 @@ app.post('/api/orders', async (req, res) => {
   for (const c of cart) {
     const it = db.items.find((i) => i.id === c.id);
     const qty = Math.min(20, Math.max(1, parseInt(c.qty, 10) || 0));
-    if (!it || !it.available) return res.status(400).json({ error: `"${it ? it.name : 'An item'}" is no longer available` });
-    lines.push({ id: it.id, name: it.name, price: it.price, qty });
+    if (!it || !it.available || isHidden(it)) return res.status(400).json({ error: `"${it ? it.name : 'An item'}" is no longer available` });
+    lines.push({ id: it.id, name: it.name, price: effectivePrice(it), qty });
   }
   const order = {
     id: db.nextOrderId++, customer: { name: cleanName, mobile: cleanMobile },
@@ -316,6 +338,7 @@ admin.put('/categories/:id', (req, res) => {
   if (!c) return res.status(404).json({ error: 'Not found' });
   if (req.body.name !== undefined) c.name = String(req.body.name).trim() || c.name;
   if (req.body.order !== undefined) c.order = +req.body.order;
+  if (req.body.hidden !== undefined) c.hidden = req.body.hidden === true || req.body.hidden === 'true';
   save(); res.json(c);
 });
 admin.delete('/categories/:id', (req, res) => {
@@ -330,7 +353,7 @@ admin.post('/items', upload.single('image'), async (req, res, next) => {
   if (!String(b.name || '').trim() || !(+b.price >= 0)) return res.status(400).json({ error: 'Name and price required' });
   const it = {
     id: uid('i'), categoryId: b.categoryId, name: b.name.trim(), price: +b.price,
-    description: String(b.description || '').trim(), available: b.available !== 'false',
+    description: String(b.description || '').trim(), available: b.available !== 'false', hidden: b.hidden === 'true',
     image: req.file ? await storeImage(req.file) : '',
   };
   db.items.push(it); save(); res.json(it);
@@ -346,12 +369,82 @@ admin.put('/items/:id', upload.single('image'), async (req, res, next) => {
   if (b.description !== undefined) it.description = b.description.trim();
   if (b.categoryId && db.categories.some((c) => c.id === b.categoryId)) it.categoryId = b.categoryId;
   if (b.available !== undefined) it.available = b.available === true || b.available === 'true';
+  if (b.hidden !== undefined) it.hidden = b.hidden === true || b.hidden === 'true';
   if (b.removeImage === 'true') it.image = '';
   if (req.file) it.image = await storeImage(req.file);
   save(); res.json(it);
   } catch (e) { next(e); }
 });
-admin.delete('/items/:id', (req, res) => { db.items = db.items.filter((i) => i.id !== req.params.id); save(); res.json({ ok: true }); });
+admin.delete('/items/:id', (req, res) => {
+  db.items = db.items.filter((i) => i.id !== req.params.id);
+  db.offers = db.offers.filter((o) => o.itemId !== req.params.id);
+  save(); res.json({ ok: true });
+});
+
+// ---- offers: one per menu item; the offer price replaces the regular price while active ----
+const BADGES = ['NEW', 'OFFER', 'LIMITED TIME'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function applyOffer(o, b) {
+  if (b.itemId !== undefined) {
+    if (!db.items.some((i) => i.id === b.itemId)) return 'Choose a menu item';
+    if (db.offers.some((x) => x.itemId === b.itemId && x.id !== o.id)) return 'This item already has an offer — edit that one instead';
+    o.itemId = b.itemId;
+  }
+  if (b.offerPrice !== undefined) {
+    const p = Number(b.offerPrice);
+    if (!(p >= 0) || b.offerPrice === '' || b.offerPrice === null) return 'Enter the offer price';
+    o.offerPrice = p;
+  }
+  const item = db.items.find((i) => i.id === o.itemId);
+  if (item && (b.offerPrice !== undefined || b.itemId !== undefined) && !(o.offerPrice < item.price)) return `Offer price must be lower than the regular price (₹${item.price})`;
+  if (b.badge !== undefined) o.badge = BADGES.includes(b.badge) ? b.badge : 'OFFER';
+  if (b.title !== undefined) o.title = String(b.title).trim().slice(0, 40);
+  if (b.endDate !== undefined) {
+    if (b.endDate && !DATE_RE.test(b.endDate)) return 'Invalid end date';
+    o.endDate = b.endDate || '';
+  }
+  if (b.active !== undefined) o.active = b.active === true || b.active === 'true';
+  return null;
+}
+admin.post('/offers', (req, res) => {
+  const o = { id: uid('o'), itemId: '', offerPrice: 0, badge: 'OFFER', title: '', endDate: '', active: true, createdAt: new Date().toISOString() };
+  const err = req.body.itemId === undefined ? 'Choose a menu item' : applyOffer(o, req.body);
+  if (err) return res.status(400).json({ error: err });
+  db.offers.push(o); save(); res.json(o);
+});
+admin.put('/offers/:id', (req, res) => {
+  const o = db.offers.find((x) => x.id === req.params.id);
+  if (!o) return res.status(404).json({ error: 'Not found' });
+  const err = applyOffer(o, req.body);
+  if (err) return res.status(400).json({ error: err });
+  save(); res.json(o);
+});
+admin.delete('/offers/:id', (req, res) => { db.offers = db.offers.filter((o) => o.id !== req.params.id); save(); res.json({ ok: true }); });
+
+// ---- expenses ----
+function applyExpense(e, b) {
+  if (b.type !== undefined) { if (!['daily', 'monthly'].includes(b.type)) return 'Choose Daily or Monthly'; e.type = b.type; }
+  if (b.category !== undefined) { const c = String(b.category).trim().slice(0, 40); if (!c) return 'Choose a category'; e.category = c; }
+  if (b.amount !== undefined) { const a = Number(b.amount); if (!(a > 0) || a > 1e8) return 'Enter a valid amount'; e.amount = Math.round(a * 100) / 100; }
+  if (b.date !== undefined) { if (!DATE_RE.test(b.date) || isNaN(new Date(b.date))) return 'Choose a date'; e.date = b.date; }
+  if (b.note !== undefined) e.note = String(b.note).trim().slice(0, 200);
+  return null;
+}
+admin.post('/expenses', (req, res) => {
+  const e = { id: uid('e'), type: '', category: '', amount: 0, date: '', note: '', createdAt: new Date().toISOString() };
+  for (const k of ['type', 'category', 'amount', 'date']) if (req.body[k] === undefined || req.body[k] === '') return res.status(400).json({ error: 'Fill in type, category, amount and date' });
+  const err = applyExpense(e, req.body);
+  if (err) return res.status(400).json({ error: err });
+  db.expenses.push(e); save(); res.json(e);
+});
+admin.put('/expenses/:id', (req, res) => {
+  const e = db.expenses.find((x) => x.id === req.params.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  const err = applyExpense(e, req.body);
+  if (err) return res.status(400).json({ error: err });
+  save(); res.json(e);
+});
+admin.delete('/expenses/:id', (req, res) => { db.expenses = db.expenses.filter((e) => e.id !== req.params.id); save(); res.json({ ok: true }); });
 
 admin.put('/orders/:id', (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);

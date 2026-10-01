@@ -1,29 +1,14 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Magic Brew · Admin</title>
+<link rel="icon" type="image/png" href="/img/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
-<style>
-body{padding-bottom:30px}
-.top{background:var(--brand2);color:var(--gold);padding:14px 16px;display:flex;justify-content:space-between;align-items:center}
-.nav{display:flex;gap:6px;overflow-x:auto;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-.wrap{max-width:900px;margin:0 auto;padding:16px}
-.masked{-webkit-text-security:disc;text-security:disc}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-@media(max-width:560px){.two{grid-template-columns:1fr}}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
-.stat{background:#fff;border-radius:14px;padding:14px;box-shadow:0 2px 10px #5a34201a}.stat b{font-size:1.5rem;color:var(--brand);display:block}
-.sm{padding:6px 10px;font-size:.8rem;border-radius:8px;border:1px solid var(--brand);background:#fff;color:var(--brand);font-weight:600;cursor:pointer}
-.sm.fill{background:var(--brand);color:#fff}.sm.danger{color:var(--bad);border-color:var(--bad)}
-.thumb{width:56px;height:56px;border-radius:10px;background:#f1e4d0 center/cover;flex:none;display:flex;align-items:center;justify-content:center}
-.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-.new{border-left:4px solid var(--gold)}
-pre{white-space:pre-wrap;background:#f4e9d8;padding:10px;border-radius:10px;font-size:.8rem}
-</style></head><body>
+<link rel="stylesheet" href="admin.css">
+</head><body>
 <div id="root"></div>
 <script>
 const R = document.getElementById('root');
-let token = localStorage.getItem('tok'), S = null, tab = 'dashboard', editing = null, toast = '';
+let token = localStorage.getItem('tok'), S = null, tab = 'dashboard', editing = null, offerEdit = null, qrData = null, xf = null;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function api(url, opt = {}) {
   opt.headers = { ...(opt.headers || {}), Authorization: 'Bearer ' + token };
@@ -34,15 +19,127 @@ async function api(url, opt = {}) {
   if (!r.ok) { alert(d.error || 'Error'); throw new Error(d.error); }
   return d;
 }
-const cur = () => S.settings.currency;
-const catName = (id) => (S.categories.find((c) => c.id === id) || {}).name || '—';
-const fdate = (d) => new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+function flash(msg) {
+  document.querySelector('.toast')?.remove();
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2200);
+}
 
+/* ---------- formatting & dates (all in the browser's local time) ---------- */
+const cur = () => S.settings.currency;
+const money = (n) => cur() + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const short = (n) => { const a = Math.abs(n), s = n < 0 ? '-' : ''; return a >= 1e5 ? s + +(a / 1e5).toFixed(1) + 'L' : a >= 1e3 ? s + +(a / 1e3).toFixed(1) + 'k' : s + Math.round(a); };
+const pad = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const today = () => ymd(new Date());
+const parse = (s) => new Date(s + 'T00:00:00');
+const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return ymd(d); };
+const dlabel = (s) => parse(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+const dayTitle = (s) => s === today() ? 'Today' : s === addDays(today(), -1) ? 'Yesterday' : parse(s).toLocaleDateString('en-IN', { weekday: 'long' });
+const ftime = (d) => new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+const odate = (o) => ymd(new Date(o.createdAt));
+const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
+const catName = (id) => (S.categories.find((c) => c.id === id) || {}).name || '—';
+
+/* ---------- period filters ---------- */
+const F = {
+  dash: { p: 'month', from: '', to: '', month: '' },
+  orders: { p: 'today', from: '', to: '', month: '', status: 'all' },
+  exp: { p: 'month', from: '', to: '', month: '', cat: 'all', type: 'all' },
+  menu: { show: 'all' },
+};
+const PRESETS = [['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'This Week'], ['month', 'This Month'], ['custom', 'Custom Date']];
+function range(f) {
+  const t = today();
+  if (f.p === 'today') return [t, t];
+  if (f.p === 'yesterday') { const y = addDays(t, -1); return [y, y]; }
+  if (f.p === 'week') { const m = addDays(t, -((new Date().getDay() + 6) % 7)); return [m, addDays(m, 6)]; }
+  if (f.p === 'month') { const a = t.slice(0, 8) + '01'; return [a, monthEnd(t.slice(0, 7))]; }
+  const a = f.from || t, b = f.to || a;
+  return a <= b ? [a, b] : [b, a];
+}
+const monthEnd = (ym) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${pad(new Date(y, m, 0).getDate())}`; };
+const rangeText = ([a, b]) => a === b ? `<b>${dlabel(a)}</b>` : `<b>${dlabel(a)}</b> – <b>${dlabel(b)}</b>`;
+function periodBar(key, extra = '') {
+  const f = F[key], [a, b] = range(f);
+  return `<div class="filters"><div class="chips">${PRESETS.map(([k, l]) => `<button class="chip ${f.p === k && !(k === 'custom' && f.month) ? 'on' : ''}" data-act="preset" data-k="${key}" data-p="${k}">${l}</button>`).join('')}</div>
+  <div class="fields">${f.p === 'custom' && !f.month ? `<label>From<input type="date" value="${a}" data-chg="from" data-k="${key}"></label><label>To<input type="date" value="${b}" data-chg="to" data-k="${key}"></label>` : ''}
+  <label>Month<input type="month" value="${f.month}" data-chg="month" data-k="${key}"></label>${extra}</div>
+  <div class="range-l">Showing ${rangeText([a, b])}</div></div>`;
+}
+
+/* ---------- data helpers ---------- */
+const liveOrders = () => S.orders.filter((o) => o.status !== 'cancelled');
+function stats(a, b) {
+  const os = liveOrders().filter((o) => { const d = odate(o); return d >= a && d <= b; });
+  const ex = S.expenses.filter((e) => e.date >= a && e.date <= b);
+  const sales = sum(os, (o) => o.total), exp = sum(ex, (e) => e.amount);
+  return { orders: os.length, sales, exp, profit: sales - exp, paid: sum(os.filter((o) => o.payment.status === 'paid'), (o) => o.total) };
+}
+// time buckets for charts: days for ranges up to ~3 months, otherwise months
+function buckets(a, b) {
+  const days = Math.round((parse(b) - parse(a)) / 864e5) + 1, keys = [];
+  if (days <= 92) {
+    for (let i = 0; i < days; i++) keys.push(addDays(a, i));
+    return { keys, keyOf: (s) => s, label: (k, i) => (i === 0 || k.endsWith('-01') ? `${+k.slice(8)} ${parse(k).toLocaleDateString('en-IN', { month: 'short' })}` : String(+k.slice(8))), full: dlabel };
+  }
+  for (let m = a.slice(0, 7); m <= b.slice(0, 7); m = addDays(monthEnd(m), 1).slice(0, 7)) keys.push(m);
+  return { keys, keyOf: (s) => s.slice(0, 7), label: monthLabel, full: monthLabel };
+}
+const monthLabel = (k) => parse(k + '-01').toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+function series(a, b, bk) {
+  const sales = {}, exp = {};
+  liveOrders().forEach((o) => { const d = odate(o); if (d >= a && d <= b) sales[bk.keyOf(d)] = (sales[bk.keyOf(d)] || 0) + o.total; });
+  S.expenses.forEach((e) => { if (e.date >= a && e.date <= b) exp[bk.keyOf(e.date)] = (exp[bk.keyOf(e.date)] || 0) + e.amount; });
+  return { sales: bk.keys.map((k) => sales[k] || 0), exp: bk.keys.map((k) => exp[k] || 0) };
+}
+
+/* ---------- charts (dependency-free SVG) ---------- */
+const C_SALES = 'var(--sales)', C_EXP = 'var(--exp)', C_PROFIT = 'var(--profit)';
+function nice(max, min) {
+  const raw = ((max - min) || 1) / 4, mag = 10 ** Math.floor(Math.log10(raw)), n = raw / mag;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  return { lo: Math.floor(min / step + 1e-9) * step, hi: Math.ceil(max / step - 1e-9) * step, step };
+}
+function chart({ labels, full, series: ss, kind = 'bar' }) {
+  const all = ss.flatMap((s) => s.vals);
+  if (!all.some((v) => v !== 0)) return '<div class="nodata">No data for this period</div>';
+  const W = 420, H = 220, L = 40, Rr = 6, T = 10, B = 26, iw = W - L - Rr, ih = H - T - B;
+  const { lo, hi, step } = nice(Math.max(0, ...all), Math.min(0, ...all));
+  const y = (v) => T + ih - ((v - lo) / (hi - lo)) * ih;
+  let g = '';
+  for (let i = 0, n = Math.round((hi - lo) / step); i <= n; i++) {
+    const v = lo + i * step;
+    g += `<line class="${Math.abs(v) < 1e-9 ? 'zero-l' : 'grid-l'}" x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${short(v)}</text>`;
+  }
+  const n = labels.length, gw = iw / n, cx = (i) => L + gw * i + gw / 2, skip = Math.ceil(n / 8);
+  let body = '';
+  if (kind === 'bar') {
+    const bw = Math.min(22, (gw * 0.8) / ss.length);
+    ss.forEach((s, si) => s.vals.forEach((v, i) => {
+      if (!v) return;
+      const x = cx(i) - (bw * ss.length) / 2 + si * bw, top = y(Math.max(v, 0)), h = Math.max(1.5, Math.abs(y(v) - y(0)));
+      body += `<rect class="bar" x="${x + 0.5}" y="${top}" width="${Math.max(1, bw - 1)}" height="${h}" rx="2" fill="${s.color}"><title>${esc(full[i])} · ${s.name}: ${money(v)}</title></rect>`;
+    }));
+  } else {
+    ss.forEach((s) => {
+      const pts = s.vals.map((v, i) => `${cx(i)},${y(v)}`);
+      body += `<path d="M${cx(0)},${y(0)} L${pts.join(' L')} L${cx(n - 1)},${y(0)}Z" fill="${s.color}" opacity=".12"/><polyline points="${pts.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
+      if (n <= 45) s.vals.forEach((v, i) => (body += `<circle class="dot" cx="${cx(i)}" cy="${y(v)}" r="3.2" fill="${v < 0 ? 'var(--bad)' : s.color}" stroke="#fff" stroke-width="1"><title>${esc(full[i])} · ${s.name}: ${money(v)}</title></circle>`));
+    });
+  }
+  const xl = labels.map((l, i) => (i % skip ? '' : `<text x="${cx(i)}" y="${H - 8}" text-anchor="middle">${esc(l)}</text>`)).join('');
+  const legend = ss.length > 1 ? `<div class="legend">${ss.map((s) => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join('')}</div>` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${ss.map((s) => s.name).join(', ')} chart">${g}${body}${xl}</svg>${legend}`;
+}
+const chartCard = (title, sub, inner) => `<div class="card ch"><h3>${title}</h3><div class="sub">${sub}</div>${inner}</div>`;
+
+/* ---------- login ---------- */
 function renderLogin(err = '') {
   let pin = '';
-  R.innerHTML = `<div class="page" style="margin-top:8vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad);min-height:1.4em" id="pe">${esc(err)}</p>
-  <div id="dots" style="font-size:2rem;letter-spacing:.6rem;margin:6px 0 14px">○○○○</div>
-  <div class="kb" style="grid-template-columns:repeat(3,1fr)">${[1,2,3,4,5,6,7,8,9,'C',0,'⌫'].map((k) => `<button type="button" data-p="${k}" style="padding:16px 0;font-size:1.3rem">${k}</button>`).join('')}</div>
+  R.innerHTML = `<div class="login"><div class="box"><h2>☕ Owner Login</h2><p class="err" id="pe">${esc(err)}</p>
+  <div class="dots" id="dots">○○○○</div>
+  <div class="kb">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 'C', 0, '⌫'].map((k) => `<button type="button" data-p="${k}">${k}</button>`).join('')}</div>
   <p><a href="#" id="usepw">Use password instead</a></p></div></div>`;
   const dots = document.getElementById('dots'), pe = document.getElementById('pe');
   const show = () => (dots.textContent = '●'.repeat(pin.length) + '○'.repeat(4 - pin.length));
@@ -60,13 +157,13 @@ function renderLogin(err = '') {
   document.getElementById('usepw').onclick = (e) => { e.preventDefault(); renderPasswordLogin(); };
 }
 function renderPasswordLogin(err = '') {
-  R.innerHTML = `<div class="page" style="margin-top:12vh"><div class="panel center"><h2>☕ Owner Login</h2><p style="color:var(--bad)">${esc(err)}</p>
+  R.innerHTML = `<div class="login"><div class="box"><h2>☕ Owner Login</h2><p class="err">${esc(err)}</p>
   <input id="pw" type="text" class="masked" placeholder="Admin password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus>
-  <label style="text-align:left"><input type="checkbox" id="showpw" style="width:auto"> Show password</label><br><button class="primary" id="login">Log in</button></div></div>`;
+  <label class="chk" style="justify-content:center"><input type="checkbox" id="showpw"> Show password</label><br><button class="btn fill wide" id="login">Log in</button></div></div>`;
   fetch('/api/admin/local-login').then((r) => r.json()).then((d) => {
     if (!d.available) return;
     const b = document.createElement('button');
-    b.className = 'ghost'; b.style.marginTop = '10px'; b.textContent = 'Continue as owner (this computer only)';
+    b.className = 'btn wide'; b.style.marginTop = '10px'; b.textContent = 'Continue as owner (this computer only)';
     b.onclick = async () => { token = (await (await fetch('/api/admin/local-login', { method: 'POST' })).json()).token; localStorage.setItem('tok', token); refresh(); };
     document.getElementById('login').after(b);
   }).catch(() => {});
@@ -81,170 +178,381 @@ function renderPasswordLogin(err = '') {
   document.getElementById('pw').onkeydown = (e) => e.key === 'Enter' && doLogin();
 }
 
+/* ---------- shell ---------- */
+const TABS = [
+  ['dashboard', '📊', 'Dashboard', 'How the café is doing'],
+  ['orders', '📦', 'Orders', 'Browse and manage orders by date'],
+  ['menu', '🍔', 'Menu', 'Items, prices and what customers can see'],
+  ['offers', '🎁', 'Offers', 'Special prices shown to customers'],
+  ['expenses', '💸', 'Expenses', 'Daily purchases and monthly bills'],
+  ['payments', '💳', 'Payments', 'Verify customer payments'],
+  ['categories', '🗂️', 'Categories', 'Rename, reorder and remove sections'],
+  ['qr', '🔳', 'Café QR', 'Printable QR for your menu'],
+  ['settings', '⚙️', 'Settings', 'Café details, WhatsApp and UPI'],
+];
+const VIEWS = () => ({ dashboard, orders: ordersTab, menu, offers, expenses, payments, categories, qr, settings });
 async function refresh(quiet) {
   if (!token) return renderLogin();
+  const sig = () => S && JSON.stringify([S.orders, S.expenses]);
+  const before = sig();
   S = await api('/state');
-  if (!quiet || !['menu', 'settings'].includes(tab) || !editing) draw();
+  if (quiet && before === sig()) return;      // nothing new: don't disturb what the owner is doing
+  draw();
 }
-
-const TABS = [['dashboard', 'Dashboard'], ['orders', 'Orders'], ['menu', 'Menu'], ['categories', 'Categories'], ['payments', 'Payments'], ['qr', 'Café QR'], ['settings', 'Settings']];
 function draw() {
-  const pend = S.orders.filter((o) => o.status === 'new').length;
-  R.innerHTML = `<div class="top"><b style="font-family:'Playfair Display'">${esc(S.settings.cafeName)} · Admin</b><button class="sm" id="logout">Log out</button></div>
-  <div class="nav">${TABS.map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}${k === 'orders' && pend ? ` (${pend})` : ''}</button>`).join('')}</div>
-  <div class="wrap" id="body"></div>`;
-  document.getElementById('logout').onclick = () => { localStorage.removeItem('tok'); token = null; renderLogin(); };
-  document.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; draw(); }));
-  const body = document.getElementById('body');
-  body.innerHTML = { dashboard, orders, menu, categories, payments, qr, settings }[tab]();
-  bind[tab] && bind[tab](body);
+  const pend = S.orders.filter((o) => o.status === 'new').length, cur_ = TABS.find((t) => t[0] === tab);
+  R.innerHTML = `<div class="app"><aside class="side"><div class="brand"><span class="logo">☕</span><div><b>${esc(S.settings.cafeName)}</b><small>Admin panel</small></div></div>
+  <nav class="nav">${TABS.map(([k, ic, l]) => `<button class="nb ${tab === k ? 'on' : ''}" data-act="tab" data-t="${k}"><span class="ic">${ic}</span>${l}${k === 'orders' && pend ? `<span class="cnt">${pend}</span>` : ''}</button>`).join('')}</nav>
+  <div class="spacer"></div><button class="logout" data-act="logout">Log out</button></aside>
+  <main class="main"><div class="ph"><div><h1>${cur_[2]}</h1><p>${cur_[3]}</p></div><div id="ph-r"></div></div><div id="body">${VIEWS()[tab]()}</div></main></div>`;
+  const hook = AFTER[tab]; if (hook) hook(document.getElementById('body'));
 }
 
 /* ---------- Dashboard ---------- */
+const kpi = (cls, ic, label, val, sub = '', extra = '') => `<div class="kpi ${cls} ${extra}"><span class="k-i">${ic}</span><span class="k-l">${label}</span><span class="k-v">${val}</span><span class="k-s">${sub || '&nbsp;'}</span></div>`;
+const profitKpi = (label, p) => kpi('profit', '📊', label, (p < 0 ? '−' : '') + money(Math.abs(p)), p < 0 ? 'Loss' : p > 0 ? 'Profit' : 'Break-even', p < 0 ? 'neg' : p > 0 ? 'pos' : '');
 function dashboard() {
-  const today = S.orders.filter((o) => new Date(o.createdAt).toDateString() === new Date().toDateString() && o.status !== 'cancelled');
-  const paid = today.filter((o) => o.payment.status === 'paid');
-  return `<div class="stats"><div class="stat"><b>${today.length}</b>Orders today</div><div class="stat"><b>${cur()}${today.reduce((s, o) => s + o.total, 0)}</b>Order value</div>
-  <div class="stat"><b>${cur()}${paid.reduce((s, o) => s + o.total, 0)}</b>Paid (verified)</div><div class="stat"><b>${S.orders.filter((o) => o.status === 'new').length}</b>New orders</div></div>
-  ${!S.settings.ownerWhatsApp ? '<div class="panel err">⚠️ Set your WhatsApp number in Settings to receive order notifications.</div>' : ''}
-  ${!S.settings.upiId && !S.settings.paymentQrImage ? '<div class="panel err">⚠️ Add your UPI ID or payment QR in Settings so customers can pay.</div>' : ''}
-  <h3>Latest orders</h3>${S.orders.slice(0, 5).map(orderCard).join('') || '<p>No orders yet.</p>'}`;
+  const t = today(), td = stats(t, t), mo = stats(t.slice(0, 8) + '01', monthEnd(t.slice(0, 7)));
+  const allOrders = liveOrders().length, cancelled = S.orders.length - allOrders, waiting = S.orders.filter((o) => o.status === 'new').length;
+  const hiddenCats = S.categories.filter((c) => c.hidden).length, hiddenItems = S.items.filter((i) => i.hidden || catHidden(i)).length;
+  const activeOffers = S.offers.filter((o) => offerState(o)[2] === 'live').length;
+  const [pa, pb] = range(F.dash), ps = stats(pa, pb), bk = buckets(pa, pb), se = series(pa, pb, bk);
+  const labels = bk.keys.map(bk.label), full = bk.keys.map(bk.full), profitVals = se.sales.map((v, i) => v - se.exp[i]);
+  // last 6 months, always
+  const mKeys = []; for (let i = 5; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); mKeys.push(ymd(d).slice(0, 7)); }
+  const m6 = mKeys.map((k) => stats(k + '-01', monthEnd(k)));
+  const byCat = {}; S.expenses.filter((e) => e.date >= pa && e.date <= pb).forEach((e) => (byCat[e.category] = (byCat[e.category] || 0) + e.amount));
+  const cats = Object.entries(byCat).sort((x, y) => y[1] - x[1]), catMax = cats[0] ? cats[0][1] : 1;
+  return `${!S.settings.ownerWhatsApp ? '<div class="alert">⚠️ Set your WhatsApp number in Settings to receive order notifications.</div>' : ''}
+  ${!S.settings.upiId && !S.settings.paymentQrImage ? '<div class="alert">⚠️ Add your UPI ID or payment QR in Settings so customers can pay.</div>' : ''}
+  <div class="sec-t"><h2>Today · ${dlabel(t)}</h2></div>
+  <div class="grid">${kpi('sales', '💰', "Today's Sales", money(td.sales), `${money(td.paid)} verified paid`)}${kpi('ord', '📦', "Today's Orders", td.orders, waiting ? `${waiting} new, waiting` : 'No orders waiting')}
+  ${kpi('exp', '💸', "Today's Expenses", money(td.exp))}${profitKpi("Today's Profit", td.profit)}</div>
+  <div class="sec-t"><h2>This month · ${parse(t).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</h2></div>
+  <div class="grid">${kpi('sales', '💰', 'Monthly Sales', money(mo.sales), `${mo.orders} orders`)}${kpi('exp', '💸', 'Monthly Expenses', money(mo.exp))}${profitKpi('Monthly Profit', mo.profit)}
+  ${kpi('ord', '📦', 'Total Orders', allOrders, cancelled ? `all time · ${cancelled} cancelled` : 'all time')}</div>
+  <div class="sec-t"><h2>Manage</h2></div>
+  <div class="grid g3">
+    <button class="kpi tile ord" data-act="tab" data-t="orders"><span class="k-go">→</span><span class="k-i">📦</span><span class="k-l">Orders</span><span class="k-v">${waiting} new</span><span class="k-s">${allOrders} orders in total</span></button>
+    <button class="kpi tile" data-act="tab" data-t="menu"><span class="k-go">→</span><span class="k-i">🍔</span><span class="k-l">Menu</span><span class="k-v">${S.items.length - hiddenItems} live items</span><span class="k-s">${hiddenItems || hiddenCats ? `${hiddenItems} item${hiddenItems === 1 ? '' : 's'} hidden${hiddenCats ? ` · ${hiddenCats} section${hiddenCats === 1 ? '' : 's'} hidden` : ''}` : 'Nothing hidden'}</span></button>
+    <button class="kpi tile" data-act="tab" data-t="offers"><span class="k-go">→</span><span class="k-i">🎁</span><span class="k-l">Offers</span><span class="k-v">${activeOffers} active</span><span class="k-s">${S.offers.length} offer${S.offers.length === 1 ? '' : 's'} created</span></button></div>
+  <div class="sec-t"><h2>Business performance</h2></div>
+  ${periodBar('dash')}
+  <div class="grid">${kpi('sales', '💰', 'Sales', money(ps.sales))}${kpi('ord', '📦', 'Orders', ps.orders)}${kpi('exp', '💸', 'Expenses', money(ps.exp))}${profitKpi('Profit', ps.profit)}</div>
+  <div class="grid charts" style="margin-top:12px">
+  ${chartCard('Daily sales &amp; expenses', bk.keyOf === undefined ? '' : (bk.keys.length && bk.keys[0].length === 7 ? 'Per month' : 'Per day') + ' · selected period', chart({ labels, full, series: [{ name: 'Sales', color: C_SALES, vals: se.sales }, { name: 'Expenses', color: C_EXP, vals: se.exp }] }))}
+  ${chartCard('Profit trend', 'Sales − expenses · selected period', chart({ kind: 'line', labels, full, series: [{ name: 'Profit', color: C_PROFIT, vals: profitVals }] }))}
+  ${chartCard('Monthly sales, expenses &amp; profit', 'Last 6 months', chart({ labels: mKeys.map(monthLabel), full: mKeys.map(monthLabel), series: [{ name: 'Sales', color: C_SALES, vals: m6.map((m) => m.sales) }, { name: 'Expenses', color: C_EXP, vals: m6.map((m) => m.exp) }, { name: 'Profit', color: C_PROFIT, vals: m6.map((m) => m.profit) }] }))}
+  <div class="card ch"><h3>Where the money goes</h3><div class="sub">Expenses by category · selected period</div>${cats.length ? `<div class="bars">${cats.map(([c, v]) => `<div class="b-r"><span>${esc(c)}</span><span class="b-t"><i style="width:${Math.max(3, (v / catMax) * 100)}%"></i></span><span class="b-v">${money(v)}</span></div>`).join('')}</div>` : '<div class="nodata">No expenses in this period</div>'}</div></div>
+  <div class="sec-t"><h2>Latest orders</h2><button class="btn sm" data-act="tab" data-t="orders">View all</button></div>
+  ${S.orders.slice(0, 4).map(orderCard).join('') || '<div class="card empty"><span class="big">🧾</span>No orders yet.</div>'}`;
 }
 
 /* ---------- Orders ---------- */
 const STAT = ['new', 'preparing', 'ready', 'completed', 'cancelled'];
+const NEXT = { new: ['preparing', 'Start preparing'], preparing: ['ready', 'Mark ready'], ready: ['completed', 'Complete'] };
+const STAT_CLS = { new: 'warn', preparing: 'info', ready: 'ok', completed: 'gray', cancelled: 'bad' };
 function orderCard(o) {
-  const pb = o.payment.status === 'paid' ? '<span class="badge ok">Paid ✓</span>' : o.payment.status === 'reported' ? '<span class="badge" style="background:#fff3cd">Customer says paid — verify</span>' : '<span class="badge">Unpaid</span>';
-  return `<div class="panel ${o.status === 'new' ? 'new' : ''}"><div class="row"><b>#${o.id} · ${esc(o.customer.name)}</b><span class="total">${cur()}${o.total}</span></div>
-  <small>${fdate(o.createdAt)} · ${esc(o.customer.mobile)}</small><div style="margin:6px 0">${o.items.map((i) => `${i.qty} × ${esc(i.name)}`).join(', ')}</div>
-  ${o.notes ? `<small>📝 ${esc(o.notes)}</small><br>` : ''}
-  <span class="badge">${o.status}</span> ${pb} ${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}
-  <div class="acts">${STAT.filter((s) => s !== o.status).map((s) => `<button class="sm" data-os="${o.id}" data-s="${s}">${s}</button>`).join('')}
-  ${o.payment.status !== 'paid' ? `<button class="sm fill" data-pay="${o.id}">Mark paid</button>` : ''}
-  <button class="sm" data-wa="${o.id}">WhatsApp</button></div></div>`;
+  const p = o.payment.status, nx = NEXT[o.status];
+  const pb = p === 'paid' ? '<span class="badge ok">Paid ✓</span>' : p === 'reported' ? '<span class="badge warn">Customer says paid · verify</span>' : '<span class="badge gray">Unpaid</span>';
+  return `<div class="oc s-${o.status}"><div class="oc-h"><div><b>#${o.id} · ${esc(o.customer.name)}</b><div class="oc-meta">${ftime(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  <div class="oc-items">${o.items.map((i) => `<div><span>${i.qty} × ${esc(i.name)}</span><span class="muted">${money(i.price * i.qty)}</span></div>`).join('')}</div>
+  ${o.notes ? `<div class="oc-note">📝 ${esc(o.notes)}</div>` : ''}
+  <div class="oc-f"><div class="acts"><span class="badge ${STAT_CLS[o.status]}">${o.status}</span>${pb}${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}</div>
+  <div class="acts">${nx ? `<button class="btn sm fill" data-act="os" data-id="${o.id}" data-s="${nx[0]}">${nx[1]}</button>` : ''}${p !== 'paid' && o.status !== 'cancelled' ? `<button class="btn sm ok" data-act="pay" data-id="${o.id}">Mark paid</button>` : ''}
+  <select data-chg="os" data-id="${o.id}" aria-label="Change status">${STAT.map((s) => `<option ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+  <button class="btn sm" data-act="wa" data-id="${o.id}">WhatsApp</button></div></div></div>`;
 }
-function orders() { return `<h3>All orders</h3>${S.orders.map(orderCard).join('') || '<p>No orders yet.</p>'}`; }
-function bindOrders(b) {
-  b.querySelectorAll('[data-os]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.os, { method: 'PUT', json: { status: x.dataset.s } }); refresh(); }));
-  b.querySelectorAll('[data-pay]').forEach((x) => (x.onclick = async () => { await api('/orders/' + x.dataset.pay, { method: 'PUT', json: { paymentStatus: 'paid' } }); refresh(); }));
-  b.querySelectorAll('[data-wa]').forEach((x) => (x.onclick = async () => {
-    const l = await api(`/orders/${x.dataset.wa}/whatsapp`);
-    const o = S.orders.find((z) => z.id === +x.dataset.wa);
-    window.open(o.payment.status === 'unpaid' ? l.order : l.payment, '_blank');
-  }));
+function ordersTab() {
+  const f = F.orders, [a, b] = range(f);
+  let os = S.orders.filter((o) => { const d = odate(o); return d >= a && d <= b; });
+  const inRange = os;
+  if (f.status !== 'all') os = os.filter((o) => o.status === f.status);
+  os.sort((x, y) => new Date(y.createdAt) - new Date(x.createdAt));
+  const live = inRange.filter((o) => o.status !== 'cancelled'), cancelled = inRange.length - live.length;
+  const total = sum(live, (o) => o.total), paid = sum(live.filter((o) => o.payment.status === 'paid'), (o) => o.total);
+  const days = {}; os.forEach((o) => (days[odate(o)] = days[odate(o)] || []).push(o));
+  const extra = `<label>Status<select data-chg="ostatus"><option value="all">All</option>${STAT.map((s) => `<option ${f.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>`;
+  return `${periodBar('orders', extra)}
+  <div class="grid">${kpi('ord', '📦', 'Total Orders', live.length, cancelled ? `+ ${cancelled} cancelled` : '')}${kpi('sales', '💰', 'Total Business', money(total), 'cancelled orders excluded')}
+  ${kpi('profit', '✅', 'Verified Paid', money(paid))}${kpi('exp', '⏳', 'Payment Pending', money(total - paid))}</div>
+  ${Object.keys(days).sort().reverse().map((d) => { const dl = days[d].filter((o) => o.status !== 'cancelled');
+    return `<div class="day"><h3>${dayTitle(d)} <small>· ${dlabel(d)}</small></h3><span>${dl.length} order${dl.length === 1 ? '' : 's'} · <b>${money(sum(dl, (o) => o.total))}</b></span></div>${days[d].map(orderCard).join('')}`; }).join('')
+    || '<div class="card empty"><span class="big">🧾</span>No orders for this period.</div>'}`;
 }
 
 /* ---------- Menu ---------- */
+const catHidden = (it) => !!(S.categories.find((c) => c.id === it.categoryId) || {}).hidden;
 function itemForm(it) {
   const n = !it.id;
-  return `<div class="panel" id="itemform"><h3>${n ? 'Add new item' : 'Edit item'}</h3>
+  return `<div class="card" id="itemform"><h3>${n ? 'Add new item' : 'Edit item'}</h3>
   <label>Name</label><input id="i-name" value="${esc(it.name || '')}">
   <div class="two"><div><label>Price (${cur()})</label><input id="i-price" type="number" min="0" value="${it.price ?? ''}"></div>
   <div><label>Category</label><select id="i-cat">${S.categories.map((c) => `<option value="${c.id}" ${c.id === it.categoryId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div></div>
   <label>Description (optional)</label><input id="i-desc" value="${esc(it.description || '')}">
   <label>Photo</label><input id="i-img" type="file" accept="image/*">
-  ${it.image ? `<label><input type="checkbox" id="i-rm" style="width:auto"> Remove current photo</label>` : ''}
-  <label><input type="checkbox" id="i-av" style="width:auto" ${it.available !== false ? 'checked' : ''}> Available</label>
-  <div class="acts"><button class="sm fill" id="i-save">Save</button><button class="sm" id="i-cancel">Cancel</button></div></div>`;
+  ${it.image ? `<label class="chk"><input type="checkbox" id="i-rm"> Remove current photo</label>` : ''}
+  <label class="chk"><input type="checkbox" id="i-av" ${it.available !== false ? 'checked' : ''}> Available (customers can order it)</label>
+  <label class="chk"><input type="checkbox" id="i-hid" ${it.hidden ? 'checked' : ''}> Hide from customers (not shown on the menu at all)</label>
+  <div class="acts" style="margin-top:16px"><button class="btn fill" data-act="i-save">Save</button><button class="btn" data-act="i-cancel">Cancel</button></div></div>`;
 }
 function menu() {
   if (editing) return itemForm(editing === 'new' ? { categoryId: S.categories[0]?.id } : S.items.find((i) => i.id === editing));
-  return `<div class="row"><h3>Menu items</h3><button class="sm fill" id="add">+ Add item</button></div>
-  ${S.categories.map((c) => `<h4 style="color:var(--brand);margin:16px 0 6px">${esc(c.name)}</h4>${S.items.filter((i) => i.categoryId === c.id).map((i) => `
-  <div class="panel row" style="margin-bottom:8px"><div style="display:flex;gap:10px;align-items:center;min-width:0"><div class="thumb" ${i.image ? `style="background-image:url('${esc(i.image)}')"` : ''}>${i.image ? '' : '🍽️'}</div>
-  <div><b>${esc(i.name)}</b><br><span class="price">${cur()}${i.price}</span> ${i.available ? '' : '<span class="tag">Unavailable</span>'}</div></div>
-  <div class="acts" style="margin:0;justify-content:flex-end"><button class="sm" data-tg="${i.id}">${i.available ? 'Mark unavailable' : 'Mark available'}</button><button class="sm" data-ed="${i.id}">Edit</button><button class="sm danger" data-rm="${i.id}">Delete</button></div></div>`).join('') || '<small>No items</small>'}`).join('')}`;
-}
-function bindMenu(b) {
-  const add = b.querySelector('#add');
-  if (add) add.onclick = () => { if (!S.categories.length) return alert('Add a category first'); editing = 'new'; draw(); };
-  b.querySelectorAll('[data-ed]').forEach((x) => (x.onclick = () => { editing = x.dataset.ed; draw(); }));
-  b.querySelectorAll('[data-tg]').forEach((x) => (x.onclick = async () => { const it = S.items.find((i) => i.id === x.dataset.tg); await api('/items/' + it.id, { method: 'PUT', json: { available: !it.available } }); refresh(); }));
-  b.querySelectorAll('[data-rm]').forEach((x) => (x.onclick = async () => { if (x.dataset.armed) { await api('/items/' + x.dataset.rm, { method: 'DELETE' }); return refresh(); } x.dataset.armed = 1; x.textContent = 'Confirm delete?'; }));
-  const save = b.querySelector('#i-save');
-  if (save) {
-    b.querySelector('#i-cancel').onclick = () => { editing = null; draw(); };
-    save.onclick = async () => {
-      const fd = new FormData();
-      fd.append('name', b.querySelector('#i-name').value); fd.append('price', b.querySelector('#i-price').value);
-      fd.append('categoryId', b.querySelector('#i-cat').value); fd.append('description', b.querySelector('#i-desc').value);
-      fd.append('available', b.querySelector('#i-av').checked);
-      const f = b.querySelector('#i-img').files[0]; if (f) fd.append('image', f);
-      const rm = b.querySelector('#i-rm'); if (rm && rm.checked) fd.append('removeImage', 'true');
-      await api(editing === 'new' ? '/items' : '/items/' + editing, { method: editing === 'new' ? 'POST' : 'PUT', body: fd });
-      editing = null; refresh();
-    };
-  }
+  const only = F.menu.show === 'hidden';
+  const hid = (i) => i.hidden || catHidden(i), hc = S.items.filter(hid).length;
+  const offerOf = (i) => S.offers.find((o) => o.itemId === i.id && offerState(o)[2] === 'live');
+  return `<div class="row" style="flex-wrap:wrap;margin-bottom:12px"><div class="chips">
+    <button class="chip ${only ? '' : 'on'}" data-act="mshow" data-v="all">All items (${S.items.length})</button><button class="chip ${only ? 'on' : ''}" data-act="mshow" data-v="hidden">Hidden (${hc})</button></div>
+    <button class="btn fill" data-act="add">+ Add item</button></div>
+  ${S.categories.sort((a, b) => a.order - b.order).map((c) => {
+    const all = S.items.filter((i) => i.categoryId === c.id), items = only ? all.filter(hid) : all;
+    if (only && !items.length && !c.hidden) return '';
+    return `<div class="cat-h ${c.hidden ? 'hid' : ''}"><h3>${esc(c.name)} <small>${all.length} item${all.length === 1 ? '' : 's'}</small>${c.hidden ? ' <span class="badge bad">👁 Section hidden from customers</span>' : ''}</h3>
+      <button class="btn sm ${c.hidden ? 'ok' : ''}" data-act="hc" data-id="${c.id}">${c.hidden ? 'Show section' : 'Hide section'}</button></div>
+    ${items.map((i) => { const h = hid(i), of = offerOf(i);
+      return `<div class="mi ${h ? 'hid' : ''}"><div class="mi-l"><div class="thumb" ${i.image ? `style="background-image:url('${esc(i.image)}')"` : ''}>${i.image ? '' : '🍽️'}</div>
+      <div class="mi-n"><b>${esc(i.name)}</b>${of ? `<span class="was">${money(i.price)}</span><span class="new-p">${money(of.offerPrice)}</span>` : `<span class="price">${money(i.price)}</span>`}
+      <div class="tags">${i.hidden ? '<span class="badge bad">Hidden</span>' : c.hidden ? '<span class="badge bad">Hidden (section)</span>' : ''}${i.available ? '' : '<span class="badge warn">Unavailable</span>'}${of ? `<span class="badge info">🎁 ${esc(of.badge)}</span>` : ''}</div></div></div>
+      <div class="acts"><button class="btn sm ${i.hidden ? 'ok' : ''}" data-act="hv" data-id="${i.id}">${i.hidden ? 'Show' : 'Hide'}</button><button class="btn sm" data-act="tg" data-id="${i.id}">${i.available ? 'Mark unavailable' : 'Mark available'}</button>
+      <button class="btn sm" data-act="ed" data-id="${i.id}">Edit</button><button class="btn sm danger" data-act="rm" data-id="${i.id}">Delete</button></div></div>`; }).join('') || '<small>No items</small>'}`; }).join('')}`;
 }
 
 /* ---------- Categories ---------- */
 function categories() {
-  return `<h3>Categories</h3><div class="panel">${S.categories.sort((a, b) => a.order - b.order).map((c, i) => `<div class="line"><input value="${esc(c.name)}" data-cn="${c.id}" style="max-width:220px">
-  <span class="acts" style="margin:0"><button class="sm" data-up="${c.id}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="sm" data-dn="${c.id}" ${i === S.categories.length - 1 ? 'disabled' : ''}>↓</button>
-  <button class="sm" data-sv="${c.id}">Rename</button><button class="sm danger" data-dc="${c.id}">Delete</button></span></div>`).join('')}</div>
-  <div class="panel"><label>New category</label><div style="display:flex;gap:8px"><input id="nc" placeholder="e.g. Shakes"><button class="sm fill" id="ac">Add</button></div></div>`;
+  const cs = [...S.categories].sort((a, b) => a.order - b.order);
+  return `<div class="card">${cs.map((c, i) => `<div class="ex"><input value="${esc(c.name)}" data-cn="${c.id}" style="max-width:240px">${c.hidden ? '<span class="badge bad">Hidden</span>' : ''}
+  <span class="acts"><button class="btn sm" data-act="up" data-id="${c.id}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn sm" data-act="dn" data-id="${c.id}" ${i === cs.length - 1 ? 'disabled' : ''}>↓</button>
+  <button class="btn sm" data-act="sv" data-id="${c.id}">Rename</button><button class="btn sm danger" data-act="dc" data-id="${c.id}">Delete</button></span></div>`).join('')}</div>
+  <div class="card"><h3>New category</h3><div class="acts"><input id="nc" placeholder="e.g. Shakes" style="max-width:300px"><button class="btn fill" data-act="ac">Add</button></div>
+  <small>Tip: to temporarily take a whole section off the customer menu, use “Hide section” in the Menu tab.</small></div>`;
 }
-function bindCategories(b) {
-  b.querySelector('#ac').onclick = async () => { const v = b.querySelector('#nc').value; if (v.trim()) { await api('/categories', { method: 'POST', json: { name: v } }); refresh(); } };
-  b.querySelectorAll('[data-sv]').forEach((x) => (x.onclick = async () => { await api('/categories/' + x.dataset.sv, { method: 'PUT', json: { name: b.querySelector(`[data-cn="${x.dataset.sv}"]`).value } }); refresh(); }));
-  b.querySelectorAll('[data-dc]').forEach((x) => (x.onclick = async () => { if (confirm('Delete this category?')) { await api('/categories/' + x.dataset.dc, { method: 'DELETE' }); refresh(); } }));
-  const swap = async (id, dir) => {
-    const l = [...S.categories].sort((a, b) => a.order - b.order), i = l.findIndex((c) => c.id === id), j = i + dir;
-    if (j < 0 || j >= l.length) return;
-    [l[i], l[j]] = [l[j], l[i]];
-    await Promise.all(l.map((c, k) => api('/categories/' + c.id, { method: 'PUT', json: { order: k } })));
-    refresh();
-  };
-  b.querySelectorAll('[data-up]').forEach((x) => (x.onclick = () => swap(x.dataset.up, -1)));
-  b.querySelectorAll('[data-dn]').forEach((x) => (x.onclick = () => swap(x.dataset.dn, 1)));
+
+/* ---------- Offers ---------- */
+const BADGES = ['OFFER', 'NEW', 'LIMITED TIME'];
+// -> [label, badge class, state key]
+function offerState(o) {
+  const it = S.items.find((i) => i.id === o.itemId);
+  if (!it) return ['Item removed', 'gray', 'gone'];
+  if (!o.active) return ['Paused', 'gray', 'paused'];
+  if (o.endDate && o.endDate < today()) return ['Expired', 'bad', 'expired'];
+  if (!(o.offerPrice < it.price)) return ['Not live · price ≥ regular', 'warn', 'bad'];
+  if (it.hidden || catHidden(it)) return ['Active · item hidden', 'warn', 'live'];
+  return ['Live', 'ok', 'live'];
+}
+const pct = (it, o) => Math.round((1 - o.offerPrice / it.price) * 100);
+function offerForm() {
+  const o = offerEdit === 'new' ? { active: true, badge: 'OFFER' } : S.offers.find((x) => x.id === offerEdit) || {};
+  const taken = new Set(S.offers.filter((x) => x.id !== o.id).map((x) => x.itemId));
+  return `<div class="card"><h3>${offerEdit === 'new' ? 'Create offer' : 'Edit offer'}</h3>
+  <label>Menu item</label><select id="o-item" data-chg="opv"><option value="">Choose an item…</option>${S.categories.map((c) => { const its = S.items.filter((i) => i.categoryId === c.id); return its.length ? `<optgroup label="${esc(c.name)}">${its.map((i) => `<option value="${i.id}" data-p="${i.price}" ${taken.has(i.id) ? 'disabled' : ''} ${i.id === o.itemId ? 'selected' : ''}>${esc(i.name)} — ${money(i.price)}${taken.has(i.id) ? ' (already has an offer)' : ''}</option>`).join('')}</optgroup>` : ''; }).join('')}</select>
+  <div class="two"><div><label>Offer price (${cur()})</label><input id="o-price" type="number" min="0" inputmode="decimal" value="${o.offerPrice ?? ''}" data-inp="opv"></div>
+  <div><label>Badge</label><select id="o-badge">${BADGES.map((b) => `<option ${o.badge === b ? 'selected' : ''}>${b}</option>`).join('')}</select></div></div>
+  <div id="o-pv" class="oc-meta" style="margin-top:6px;min-height:1.4em"></div>
+  <div class="two"><div><label>Headline (optional)</label><input id="o-title" maxlength="40" placeholder="e.g. Korean Cheese Garlic Bun Special" value="${esc(o.title || '')}"></div>
+  <div><label>Valid until (optional)</label><input id="o-end" type="date" value="${esc(o.endDate || '')}"></div></div>
+  <label class="chk"><input type="checkbox" id="o-act" ${o.active !== false ? 'checked' : ''}> Active (visible to customers)</label>
+  <div class="acts" style="margin-top:16px"><button class="btn fill" data-act="o-save">Save offer</button><button class="btn" data-act="o-cancel">Cancel</button></div></div>`;
+}
+function offers() {
+  if (offerEdit) return offerForm();
+  return `<div class="row" style="margin-bottom:14px"><span class="muted">When an offer is active, customers see the original price struck through and pay the offer price.</span><button class="btn fill" data-act="o-new">+ New offer</button></div>
+  ${S.offers.length ? `<div class="offers">${S.offers.map((o) => { const it = S.items.find((i) => i.id === o.itemId); if (!it) return '';
+    const [lbl, cls] = offerState(o);
+    return `<div class="of ${o.active ? '' : 'off'}"><div class="of-img" ${it.image ? `style="background-image:url('${esc(it.image)}')"` : ''}>${it.image ? '' : '🍽️'}<span class="ribbon ${o.badge === 'LIMITED TIME' ? 'LIMITED' : o.badge}">${esc(o.badge)}</span></div>
+    <div class="of-b"><div class="row"><h4>${esc(o.title || it.name)}</h4><span class="badge ${cls}">${lbl}</span></div>
+    ${o.title ? `<small>${esc(it.name)}</small>` : ''}
+    <div class="of-pr"><span class="was">${money(it.price)}</span><span class="now">${money(o.offerPrice)}</span>${o.offerPrice < it.price ? `<span class="badge ok pct">${pct(it, o)}% off</span>` : ''}</div>
+    ${o.endDate ? `<small>Valid until ${dlabel(o.endDate)}</small>` : '<small>No end date</small>'}
+    <div class="of-f"><label class="sw" title="Active"><input type="checkbox" data-chg="o-tg" data-id="${o.id}" ${o.active ? 'checked' : ''}><i></i></label><small>${o.active ? 'Active' : 'Inactive'}</small>
+    <span style="margin-left:auto" class="acts"><button class="btn sm" data-act="o-ed" data-id="${o.id}">Edit</button><button class="btn sm danger" data-act="o-rm" data-id="${o.id}">Remove</button></span></div></div></div>`; }).join('')}</div>`
+  : '<div class="card empty"><span class="big">🎁</span>No offers yet. Create one — e.g. Cheese Garlic Bun ₹180 → ₹99.</div>'}`;
+}
+function offerPreview() {
+  const sel = document.getElementById('o-item'), pv = document.getElementById('o-pv'); if (!sel || !pv) return;
+  const p = +(sel.selectedOptions[0]?.dataset.p || 0), v = document.getElementById('o-price').value;
+  if (!p) { pv.textContent = ''; return; }
+  pv.innerHTML = v === '' ? `Regular price: <b>${money(p)}</b>` : +v < p ? `Regular <b>${money(p)}</b> → offer <b>${money(+v)}</b> · customers save ${money(p - v)} (${Math.round((1 - v / p) * 100)}% off)` : `<span style="color:var(--bad)">Offer price must be lower than the regular price (${money(p)})</span>`;
+}
+
+/* ---------- Expenses ---------- */
+const DAILY_CATS = ['Bread', 'Eggs', 'Chicken', 'Milk', 'Vegetables', 'Other ingredients', 'Packaging / material', 'Other'];
+const MONTHLY_CATS = ['Rent', 'Electricity', 'Internet', 'Staff salary', 'Maintenance', 'Other'];
+const newXf = (keep = {}) => ({ id: '', type: 'daily', category: '', amount: '', date: today(), note: '', ...keep });
+const catsFor = (type, extra) => { const l = [...(type === 'monthly' ? MONTHLY_CATS : DAILY_CATS)]; if (extra && !l.includes(extra)) l.unshift(extra); return l; };
+function expenses() {
+  xf = xf || newXf();
+  if (!xf.category || (!catsFor(xf.type, xf.id ? xf.category : '').includes(xf.category))) xf.category = catsFor(xf.type)[0];
+  const f = F.exp, [a, b] = range(f);
+  const allCats = [...new Set([...DAILY_CATS, ...MONTHLY_CATS, ...S.expenses.map((e) => e.category)])];
+  let list = S.expenses.filter((e) => e.date >= a && e.date <= b);
+  if (f.cat !== 'all') list = list.filter((e) => e.category === f.cat);
+  if (f.type !== 'all') list = list.filter((e) => e.type === f.type);
+  list.sort((x, y) => (y.date > x.date ? 1 : y.date < x.date ? -1 : (y.createdAt || '') > (x.createdAt || '') ? 1 : -1));
+  const tot = sum(list, (e) => e.amount), dTot = sum(list.filter((e) => e.type === 'daily'), (e) => e.amount), mTot = tot - dTot;
+  const days = {}; list.forEach((e) => (days[e.date] = days[e.date] || []).push(e));
+  const extra = `<label>Category<select data-chg="xcat"><option value="all">All</option>${allCats.map((c) => `<option ${f.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+  <label>Type<select data-chg="xtype"><option value="all">All</option><option value="daily" ${f.type === 'daily' ? 'selected' : ''}>Daily</option><option value="monthly" ${f.type === 'monthly' ? 'selected' : ''}>Monthly</option></select></label>`;
+  return `<div class="card" id="xform"><h3>${xf.id ? 'Edit expense' : 'Add expense'}</h3>
+  <div class="seg" role="group" aria-label="Expense type"><button class="${xf.type === 'daily' ? 'on' : ''}" data-act="xtype" data-v="daily">Daily</button><button class="${xf.type === 'monthly' ? 'on' : ''}" data-act="xtype" data-v="monthly">Monthly</button></div>
+  <div class="two"><div><label>Category</label><select data-xf="category">${catsFor(xf.type, xf.id ? xf.category : '').map((c) => `<option ${xf.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+  <div><label>Amount (${cur()})</label><input type="number" min="0" step="0.01" inputmode="decimal" data-xf="amount" value="${esc(xf.amount)}" placeholder="0"></div></div>
+  <div class="two"><div><label>Date</label><input type="date" data-xf="date" value="${esc(xf.date)}"></div>
+  <div><label>Note (optional)</label><input data-xf="note" maxlength="200" value="${esc(xf.note)}" placeholder="e.g. 5 kg chicken from Sharma Traders"></div></div>
+  <div class="acts" style="margin-top:16px"><button class="btn fill" data-act="x-save">${xf.id ? 'Update expense' : 'Add expense'}</button>${xf.id ? '<button class="btn" data-act="x-cancel">Cancel</button>' : ''}</div></div>
+  ${periodBar('exp', extra)}
+  <div class="grid">${kpi('exp', '💸', 'Total Expenses', money(tot), `${list.length} entr${list.length === 1 ? 'y' : 'ies'}`)}${kpi('exp', '🛒', 'Daily', money(dTot))}${kpi('exp', '🏠', 'Monthly', money(mTot))}</div>
+  ${Object.keys(days).sort().reverse().map((d) => `<div class="day"><h3>${dayTitle(d)} <small>· ${dlabel(d)}</small></h3><span>Total <b>${money(sum(days[d], (e) => e.amount))}</b></span></div>
+  <div class="card flush">${days[d].map((e) => `<div class="ex"><div class="ex-m"><span><b>${esc(e.category)}</b> <span class="badge ${e.type === 'monthly' ? 'info' : 'gray'}">${e.type}</span></span>${e.note ? `<small>${esc(e.note)}</small>` : ''}</div>
+  <span class="ex-amt">${money(e.amount)}</span><span class="acts"><button class="btn sm" data-act="x-ed" data-id="${e.id}">Edit</button><button class="btn sm danger" data-act="x-rm" data-id="${e.id}">Delete</button></span></div>`).join('')}</div>`).join('')
+  || '<div class="card empty"><span class="big">🧾</span>No expenses for this selection.</div>'}`;
 }
 
 /* ---------- Payments ---------- */
 function payments() {
   const p = S.orders.filter((o) => o.payment.status !== 'unpaid');
   const tot = S.orders.filter((o) => o.payment.status === 'paid').reduce((s, o) => s + o.total, 0);
-  return `<h3>Payments</h3><div class="stats"><div class="stat"><b>${cur()}${tot}</b>Verified total</div><div class="stat"><b>${S.orders.filter((o) => o.payment.status === 'reported').length}</b>Awaiting verification</div></div>
-  <p style="color:var(--muted);font-size:.85rem">UPI payments go straight to your account. Check your bank/UPI app, then tap “Mark paid” on the order to verify.</p>
-  ${p.map(orderCard).join('') || '<p>No payments yet.</p>'}`;
+  return `<div class="grid">${kpi('profit', '✅', 'Verified Total', money(tot))}${kpi('exp', '⏳', 'Awaiting Verification', S.orders.filter((o) => o.payment.status === 'reported').length)}</div>
+  <p class="muted">UPI payments go straight to your account. Check your bank/UPI app, then tap “Mark paid” on the order to verify.</p>
+  ${p.map(orderCard).join('') || '<div class="card empty"><span class="big">💳</span>No payments yet.</div>'}`;
 }
 
 /* ---------- Café QR ---------- */
-let qrData = null;
 function qr() {
-  return `<h3>Café QR Code</h3><div class="panel center">${qrData ? `<img class="qrimg" src="${qrData.qr}"><p><b>${esc(qrData.url)}</b></p>
-  ${qrData.isLocal ? '<p class="err">This address only works on your Wi-Fi. Deploy the app online and enter its public URL in Settings, then print this QR.</p>' : ''}
-  <button class="sm fill" id="printqr">Print QR</button>` : 'Loading…'}</div>`;
-}
-function bindQr(b) {
-  api('/cafe-qr').then((d) => { const first = !qrData; qrData = d; if (first) draw(); });
-  const p = b.querySelector('#printqr');
-  if (p) p.onclick = () => { const w = window.open(''); w.document.write(`<body style="text-align:center;font-family:Georgia"><h1>${esc(S.settings.cafeName)}</h1><h2>Scan to view menu & order</h2><img src="${qrData.qr}" style="width:420px"><p>${esc(qrData.url)}</p></body>`); w.document.close(); w.print(); };
+  return `<div class="card center">${qrData ? `<img class="qrimg" src="${qrData.qr}" alt="Menu QR code"><p><b>${esc(qrData.url)}</b></p>
+  ${qrData.isLocal ? '<p style="color:var(--bad)">This address only works on your Wi-Fi. Deploy the app online and enter its public URL in Settings, then print this QR.</p>' : ''}
+  <button class="btn fill" data-act="printqr">Print QR</button>` : 'Loading…'}</div>`;
 }
 
 /* ---------- Settings ---------- */
 function settings() {
   const s = S.settings;
-  return `<h3>Settings</h3><div class="panel"><label>Café name</label><input id="s-cafeName" value="${esc(s.cafeName)}"><label>Tagline</label><input id="s-tagline" value="${esc(s.tagline)}">
+  return `<div class="card"><label>Café name</label><input id="s-cafeName" value="${esc(s.cafeName)}"><label>Tagline</label><input id="s-tagline" value="${esc(s.tagline)}">
   <label>Public menu URL (for the QR code, e.g. https://menu.magicbrew.in)</label><input id="s-publicUrl" value="${esc(s.publicUrl)}"></div>
-  <div class="panel"><b>WhatsApp notifications</b><label>Owner/chef WhatsApp number (with country code, e.g. 919876543210)</label><input id="s-ownerWhatsApp" value="${esc(s.ownerWhatsApp)}" inputmode="numeric">
-  <small style="color:var(--muted)">${S.whatsappApi ? '✅ WhatsApp Cloud API is configured — messages are sent automatically.' : 'Cloud API not configured: customers get a “Send on WhatsApp” button that opens a pre-filled message to this number. See README to enable fully automatic sending.'}</small></div>
-  <div class="panel"><b>Payment</b><label>UPI ID (e.g. magicbrew@okhdfc)</label><input id="s-upiId" value="${esc(s.upiId)}"><label>Payee name</label><input id="s-upiName" value="${esc(s.upiName)}">
-  <small style="color:var(--muted)">A QR with the exact bill amount is generated per order from your UPI ID.</small>
+  <div class="card"><h3>WhatsApp notifications</h3><label>Owner/chef WhatsApp number (with country code, e.g. 919876543210)</label><input id="s-ownerWhatsApp" value="${esc(s.ownerWhatsApp)}" inputmode="numeric">
+  <small>${S.whatsappApi ? '✅ WhatsApp Cloud API is configured — messages are sent automatically.' : 'Cloud API not configured: customers get a “Send on WhatsApp” button that opens a pre-filled message to this number. See README to enable fully automatic sending.'}</small></div>
+  <div class="card"><h3>Payment</h3><label>UPI ID (e.g. magicbrew@okhdfc)</label><input id="s-upiId" value="${esc(s.upiId)}"><label>Payee name</label><input id="s-upiName" value="${esc(s.upiName)}">
+  <small>A QR with the exact bill amount is generated per order from your UPI ID.</small>
   <label>Or upload your own bank/UPI QR image (overrides the generated QR)</label><input type="file" id="s-qr" accept="image/*">
-  ${s.paymentQrImage ? `<br><img src="${esc(s.paymentQrImage)}" style="width:120px;margin-top:8px"><br><button class="sm danger" id="rmqr">Remove uploaded QR</button>` : ''}</div>
-  <button class="primary" id="s-save">Save settings</button>`;
+  ${s.paymentQrImage ? `<br><img src="${esc(s.paymentQrImage)}" alt="Uploaded payment QR" style="width:120px;margin-top:8px"><br><button class="btn sm danger" data-act="rmqr" style="margin-top:8px">Remove uploaded QR</button>` : ''}</div>
+  <button class="btn fill" data-act="s-save">Save settings</button>`;
 }
-function bindSettings(b) {
-  b.querySelector('#s-save').onclick = async () => {
-    const json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerWhatsApp', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
+
+/* ---------- after-render hooks ---------- */
+const AFTER = {
+  qr: () => { if (!qrData) api('/cafe-qr').then((d) => { qrData = d; if (tab === 'qr') draw(); }); },
+  offers: () => offerPreview(),
+};
+
+/* ---------- events ---------- */
+const body = () => document.getElementById('body');
+const orderById = (id) => S.orders.find((o) => o.id === +id);
+const putOrder = async (id, json) => { await api('/orders/' + id, { method: 'PUT', json }); refresh(); };
+const ACT = {
+  tab: (el) => { tab = el.dataset.t; editing = null; offerEdit = null; window.scrollTo(0, 0); draw(); },
+  logout: () => { localStorage.removeItem('tok'); token = null; renderLogin(); },
+  preset: (el) => {
+    const f = F[el.dataset.k], p = el.dataset.p;
+    if (p === 'custom') { const [a, b] = range(f); f.from = a; f.to = b; }
+    f.p = p; f.month = ''; draw();
+  },
+  // orders
+  os: (el) => putOrder(el.dataset.id, { status: el.dataset.s }),
+  pay: (el) => putOrder(el.dataset.id, { paymentStatus: 'paid' }),
+  wa: async (el) => { const l = await api(`/orders/${el.dataset.id}/whatsapp`); window.open(orderById(el.dataset.id).payment.status === 'unpaid' ? l.order : l.payment, '_blank'); },
+  // menu
+  add: () => { if (!S.categories.length) return alert('Add a category first'); editing = 'new'; draw(); },
+  ed: (el) => { editing = el.dataset.id; draw(); },
+  mshow: (el) => { F.menu.show = el.dataset.v; draw(); },
+  tg: async (el) => { const it = S.items.find((i) => i.id === el.dataset.id); await api('/items/' + it.id, { method: 'PUT', json: { available: !it.available } }); refresh(); },
+  hv: async (el) => { const it = S.items.find((i) => i.id === el.dataset.id); await api('/items/' + it.id, { method: 'PUT', json: { hidden: !it.hidden } }); flash(it.hidden ? `${it.name} is visible again` : `${it.name} hidden from customers`); refresh(); },
+  hc: async (el) => { const c = S.categories.find((x) => x.id === el.dataset.id); await api('/categories/' + c.id, { method: 'PUT', json: { hidden: !c.hidden } }); flash(c.hidden ? `${c.name} is visible again` : `${c.name} hidden from customers`); refresh(); },
+  rm: async (el) => { if (el.dataset.armed) { await api('/items/' + el.dataset.id, { method: 'DELETE' }); return refresh(); } el.dataset.armed = 1; el.textContent = 'Confirm delete?'; },
+  'i-cancel': () => { editing = null; draw(); },
+  'i-save': async () => {
+    const b = body(), fd = new FormData();
+    fd.append('name', b.querySelector('#i-name').value); fd.append('price', b.querySelector('#i-price').value);
+    fd.append('categoryId', b.querySelector('#i-cat').value); fd.append('description', b.querySelector('#i-desc').value);
+    fd.append('available', b.querySelector('#i-av').checked); fd.append('hidden', b.querySelector('#i-hid').checked);
+    const f = b.querySelector('#i-img').files[0]; if (f) fd.append('image', f);
+    const rm = b.querySelector('#i-rm'); if (rm && rm.checked) fd.append('removeImage', 'true');
+    await api(editing === 'new' ? '/items' : '/items/' + editing, { method: editing === 'new' ? 'POST' : 'PUT', body: fd });
+    editing = null; flash('Saved ✓'); refresh();
+  },
+  // categories
+  ac: async () => { const v = body().querySelector('#nc').value; if (v.trim()) { await api('/categories', { method: 'POST', json: { name: v } }); refresh(); } },
+  sv: async (el) => { await api('/categories/' + el.dataset.id, { method: 'PUT', json: { name: body().querySelector(`[data-cn="${el.dataset.id}"]`).value } }); flash('Renamed ✓'); refresh(); },
+  dc: async (el) => { if (confirm('Delete this category?')) { await api('/categories/' + el.dataset.id, { method: 'DELETE' }); refresh(); } },
+  up: (el) => swapCat(el.dataset.id, -1), dn: (el) => swapCat(el.dataset.id, 1),
+  // offers
+  'o-new': () => { offerEdit = 'new'; draw(); },
+  'o-ed': (el) => { offerEdit = el.dataset.id; draw(); },
+  'o-cancel': () => { offerEdit = null; draw(); },
+  'o-rm': async (el) => { if (el.dataset.armed) { await api('/offers/' + el.dataset.id, { method: 'DELETE' }); flash('Offer removed'); return refresh(); } el.dataset.armed = 1; el.textContent = 'Confirm remove?'; },
+  'o-save': async () => {
+    const b = body(), json = { itemId: b.querySelector('#o-item').value, offerPrice: b.querySelector('#o-price').value, badge: b.querySelector('#o-badge').value,
+      title: b.querySelector('#o-title').value, endDate: b.querySelector('#o-end').value, active: b.querySelector('#o-act').checked };
+    await api(offerEdit === 'new' ? '/offers' : '/offers/' + offerEdit, { method: offerEdit === 'new' ? 'POST' : 'PUT', json });
+    offerEdit = null; flash('Offer saved ✓'); refresh();
+  },
+  // expenses
+  xtype: (el) => { xf.type = el.dataset.v; draw(); },
+  'x-cancel': () => { xf = newXf({ type: xf.type }); draw(); },
+  'x-ed': (el) => { const e = S.expenses.find((x) => x.id === el.dataset.id); xf = { ...newXf(), ...e, amount: String(e.amount) }; draw(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+  'x-rm': async (el) => { if (el.dataset.armed) { await api('/expenses/' + el.dataset.id, { method: 'DELETE' }); if (xf.id === el.dataset.id) xf = newXf(); flash('Expense deleted'); return refresh(); } el.dataset.armed = 1; el.textContent = 'Confirm delete?'; },
+  'x-save': async () => {
+    if (!(+xf.amount > 0)) return alert('Enter the amount');
+    if (!xf.date) return alert('Choose a date');
+    const json = { type: xf.type, category: xf.category, amount: xf.amount, date: xf.date, note: xf.note };
+    await api(xf.id ? '/expenses/' + xf.id : '/expenses', { method: xf.id ? 'PUT' : 'POST', json });
+    xf = newXf({ type: xf.type, date: xf.date }); flash('Expense saved ✓'); refresh();
+  },
+  // misc
+  printqr: () => { const w = window.open(''); w.document.write(`<body style="text-align:center;font-family:Georgia"><h1>${esc(S.settings.cafeName)}</h1><h2>Scan to view menu & order</h2><img src="${qrData.qr}" style="width:420px"><p>${esc(qrData.url)}</p></body>`); w.document.close(); w.print(); },
+  rmqr: async () => { await api('/settings/payment-qr', { method: 'DELETE' }); refresh(); },
+  's-save': async () => {
+    const b = body(), json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerWhatsApp', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
     await api('/settings', { method: 'PUT', json });
     const f = b.querySelector('#s-qr').files[0];
     if (f) { const fd = new FormData(); fd.append('image', f); await api('/settings/payment-qr', { method: 'POST', body: fd }); }
-    qrData = null; await refresh(); alert('Saved ✓');
-  };
-  const r = b.querySelector('#rmqr'); if (r) r.onclick = async () => { await api('/settings/payment-qr', { method: 'DELETE' }); refresh(); };
+    qrData = null; await refresh(); flash('Settings saved ✓');
+  },
+};
+async function swapCat(id, dir) {
+  const l = [...S.categories].sort((a, b) => a.order - b.order), i = l.findIndex((c) => c.id === id), j = i + dir;
+  if (j < 0 || j >= l.length) return;
+  [l[i], l[j]] = [l[j], l[i]];
+  await Promise.all(l.map((c, k) => api('/categories/' + c.id, { method: 'PUT', json: { order: k } })));
+  refresh();
 }
-const bind = { orders: bindOrders, dashboard: bindOrders, payments: bindOrders, menu: bindMenu, categories: bindCategories, qr: bindQr, settings: bindSettings };
+const CHG = {
+  os: (el) => putOrder(el.dataset.id, { status: el.value }),
+  ostatus: (el) => { F.orders.status = el.value; draw(); },
+  from: (el) => { const f = F[el.dataset.k]; f.p = 'custom'; f.month = ''; f.from = el.value; if (!f.to || f.to < el.value) f.to = el.value; draw(); },
+  to: (el) => { const f = F[el.dataset.k]; f.p = 'custom'; f.month = ''; f.to = el.value; if (!f.from || f.from > el.value) f.from = el.value; draw(); },
+  month: (el) => {
+    const f = F[el.dataset.k];
+    if (!el.value) { f.p = 'month'; f.month = ''; } else { f.p = 'custom'; f.month = el.value; f.from = el.value + '-01'; f.to = monthEnd(el.value); }
+    draw();
+  },
+  xcat: (el) => { F.exp.cat = el.value; draw(); },
+  xtype: (el) => { F.exp.type = el.value; draw(); },
+  'o-tg': async (el) => { await api('/offers/' + el.dataset.id, { method: 'PUT', json: { active: el.checked } }); flash(el.checked ? 'Offer is live' : 'Offer paused'); refresh(); },
+  opv: offerPreview,
+};
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-act]');
+  if (!el || !ACT[el.dataset.act]) return;
+  try { await ACT[el.dataset.act](el, e); } catch (err) { console.error(err); }
+});
+document.addEventListener('change', async (e) => {
+  const x = e.target.dataset.xf; if (x && xf) { xf[x] = e.target.value; return; }
+  const el = e.target.closest('[data-chg]');
+  if (el && CHG[el.dataset.chg]) try { await CHG[el.dataset.chg](el, e); } catch (err) { console.error(err); }
+});
+document.addEventListener('input', (e) => {
+  const x = e.target.dataset.xf; if (x && xf) xf[x] = e.target.value;
+  if (e.target.dataset.inp === 'opv') offerPreview();
+});
 
 (async () => {
   const key = new URLSearchParams(location.search).get('key');
@@ -257,6 +565,6 @@ const bind = { orders: bindOrders, dashboard: bindOrders, payments: bindOrders, 
   }
   refresh();
 })();
-// live order updates
+// live order updates (only repaints when orders/expenses actually changed)
 setInterval(() => { if (token && ['dashboard', 'orders', 'payments'].includes(tab)) refresh(true).catch(() => {}); }, 15000);
 </script></body></html>
