@@ -297,7 +297,7 @@ function confirmView() {
   const needSend = !d.whatsappSent && d.whatsappLink;
   if (view === 'confirm') setTimeout(() => { revealOrderLinks(); startBackCountdown(); }, 0);
   return `<div class="page center"><div class="big">${needSend ? '💬' : '✅'}</div><h2>${needSend ? 'Almost there!' : 'Order Placed!'}</h2>
-  <p>Order <b>#${order.id}</b> for ${esc(order.customer.name)}</p>
+  <p>Order <b>#${String(order.id).padStart(2, '0')}</b> for ${esc(order.customer.name)}</p>
   ${needSend ? `<div class="panel hint2" id="opening"><b>Opening WhatsApp…</b><br>Press <b>Send</b> there. We'll bring you back to your bill in a few seconds.</div>${waBtn(d.whatsappLink, 'Open WhatsApp again')}` : ''}
   <div style="text-align:left">${orderSummary(order)}</div>
   <div id="after" hidden><div class="panel" style="text-align:left"><b>Your order link</b><small style="display:block;color:var(--muted);margin:2px 0 8px">Keep it to check your order and pay the bill any time.</small>
@@ -346,7 +346,7 @@ async function statusView() {
   const d = window.__wa || {};
   const st = { new: 'Received', preparing: 'Being prepared 👨‍🍳', ready: 'Ready 🎉', completed: 'Completed', cancelled: 'Cancelled' }[order.status];
   const ps = order.payment.status;
-  $app.innerHTML = `<div class="page"><button class="back" data-go="menu">← Menu</button><h2>Order #${order.id}</h2>
+  $app.innerHTML = `<div class="page"><button class="back" data-go="menu">← Menu</button><h2>Order #${String(order.id).padStart(2, '0')}</h2>
   <div class="panel"><div class="line"><span>Order status</span><span class="badge">${st}</span></div>
   <div class="line"><span>Payment</span><span class="badge ${ps === 'paid' ? 'ok' : ''}">${ps === 'paid' ? 'Paid ✓' : ps === 'reported' ? 'Awaiting café confirmation' : 'Unpaid'}</span></div>
   ${order.payment.txnId ? `<div class="line"><span>Transaction ID</span><span>${esc(order.payment.txnId)}</span></div>` : ''}</div>

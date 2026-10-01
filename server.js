@@ -24,7 +24,7 @@ function seed() {
       publicUrl: '', paymentQrImage: '', currency: '₹',
     },
     ...buildMenu(), menuVersion: MENU_VERSION,
-    orders: [], nextOrderId: 1001,
+    orders: [], nextOrderId: 1,
   };
 }
 // Storage: on Vercel (no writable disk) data lives in Upstash Redis (REST) and photos in Vercel Blob.
@@ -55,6 +55,7 @@ function ensureShape() {
     [...db.categories].sort((a, b) => rank(a) - rank(b) || a.order - b.order).forEach((c, i) => (c.order = i));
     db.catOrderV2 = true; changed = true;
   }
+  if (!db.orders.length && db.nextOrderId !== 1) { db.nextOrderId = 1; changed = true; }   // no orders yet: numbering starts at 01
   return changed;
 }
 async function loadDb() {
@@ -79,6 +80,7 @@ async function persist() {
   fs.renameSync(tmp, DATA_FILE);
 }
 const save = () => { dirty = true; };   // flushed just before each response is sent
+const oid = (id) => String(id).padStart(2, '0');   // display form: 01, 02 … 100
 const uid = (p) => p + crypto.randomBytes(4).toString('hex');
 
 // ---------- app ----------
@@ -218,7 +220,7 @@ app.get('/api/menu', (req, res) => {
 function orderText(o, s, link) {
   const lines = o.items.map((i) => `${i.qty} × ${i.name} – ${s.currency}${i.price * i.qty}`);
   return [
-    `*New Order #${o.id}*`,
+    `*New Order #${oid(o.id)}*`,
     `Customer: ${o.customer.name}`,
     `Mobile: ${o.customer.mobile}`,
     o.notes ? `Note: ${o.notes}` : null,
@@ -231,7 +233,7 @@ function orderText(o, s, link) {
 function paymentText(o, s, link) {
   const lines = o.items.map((i) => `${i.qty} × ${i.name}`);
   return [
-    `*Payment ${o.payment.status === 'paid' ? 'Received' : 'Reported'} – Order #${o.id}*`,
+    `*Payment ${o.payment.status === 'paid' ? 'Received' : 'Reported'} – Order #${oid(o.id)}*`,
     `Customer: ${o.customer.name}`,
     `Mobile: ${o.customer.mobile}`,
     '', ...lines, '',
@@ -311,7 +313,7 @@ app.get('/api/orders/:id/pay', async (req, res) => {
   const s = db.settings;
   let upiLink = null, qr = null;
   if (s.upiId) {
-    upiLink = `upi://pay?pa=${encodeURIComponent(s.upiId)}&pn=${encodeURIComponent(s.upiName)}&am=${o.total.toFixed(2)}&cu=INR&tn=${encodeURIComponent('Order ' + o.id)}`;
+    upiLink = `upi://pay?pa=${encodeURIComponent(s.upiId)}&pn=${encodeURIComponent(s.upiName)}&am=${o.total.toFixed(2)}&cu=INR&tn=${encodeURIComponent('Order ' + oid(o.id))}`;
     qr = await QRCode.toDataURL(upiLink, { margin: 1, width: 360 });
   }
   res.json({ upiLink, qr, uploadedQr: s.paymentQrImage, total: o.total, upiId: s.upiId });
@@ -478,7 +480,7 @@ admin.put('/orders/:id', (req, res) => {
 admin.delete('/orders', (req, res) => {
   if (req.body.confirm !== 'DELETE') return res.status(400).json({ error: 'Confirmation required' });
   const removed = db.orders.length;
-  db.orders = []; db.nextOrderId = 1001;
+  db.orders = []; db.nextOrderId = 1;
   save(); res.json({ ok: true, removed });
 });
 admin.get('/orders/:id/whatsapp', (req, res) => {

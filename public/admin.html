@@ -255,7 +255,7 @@ const STAT_CLS = { new: 'warn', preparing: 'info', ready: 'ok', completed: 'gray
 function orderCard(o) {
   const p = o.payment.status, nx = NEXT[o.status];
   const pb = p === 'paid' ? '<span class="badge ok">Paid ✓</span>' : p === 'reported' ? '<span class="badge warn">Customer says paid · verify</span>' : '<span class="badge gray">Unpaid</span>';
-  return `<div class="oc s-${o.status}"><div class="oc-h"><div><b>#${o.id} · ${esc(o.customer.name)}</b><div class="oc-meta">${ftime(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  return `<div class="oc s-${o.status}"><div class="oc-h"><div><b>#${String(o.id).padStart(2, '0')} · ${esc(o.customer.name)}</b><div class="oc-meta">${ftime(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
   <div class="oc-items">${o.items.map((i) => `<div><span>${i.qty} × ${esc(i.name)}</span><span class="muted">${money(i.price * i.qty)}</span></div>`).join('')}</div>
   ${o.notes ? `<div class="oc-note">📝 ${esc(o.notes)}</div>` : ''}
   <div class="oc-f"><div class="acts"><span class="badge ${STAT_CLS[o.status]}">${o.status}</span>${pb}${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}</div>
