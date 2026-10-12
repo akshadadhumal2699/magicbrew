@@ -281,17 +281,34 @@ const orderFor = (req) => {
 const waLink = (text) => `https://wa.me/${db.settings.ownerWhatsApp.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
 
 // Sends automatically if Cloud API creds are configured; otherwise the client/admin uses the wa.me link.
-async function sendWhatsApp(text) {
+// Server-side delivery through the WhatsApp Business Cloud API: one message per order, no customer action.
+// Meta only allows free-text messages to numbers that messaged the business number in the last 24h; the
+// reliable route is an approved template (WHATSAPP_TEMPLATE_NAME) whose body has 6 variables:
+// {{1}} order no, {{2}} table, {{3}} customer, {{4}} mobile, {{5}} items, {{6}} total.
+const WA_TEMPLATE = process.env.WHATSAPP_TEMPLATE_NAME || '', WA_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
+const waNumber = (n) => { const d = String(n || '').replace(/D/g, ''); return d.length === 10 ? '91' + d : d; };   // bare 10-digit = India
+const waParam = (t) => ({ type: 'text', text: String(t).replace(/s+/g, ' ').trim().slice(0, 300) || '-' });
+async function sendWhatsApp(text, order) {
   if (!WA_TOKEN || !WA_PHONE_ID || !db.settings.ownerWhatsApp) return false;
+  const useTpl = !!(WA_TEMPLATE && order);
+  const body = { messaging_product: 'whatsapp', to: waNumber(db.settings.ownerWhatsApp) };
+  if (useTpl) {
+    body.type = 'template';
+    body.template = { name: WA_TEMPLATE, language: { code: WA_LANG }, components: [{ type: 'body', parameters: [
+      oid(order.id), order.table || '-', order.customer.name, order.customer.mobile,
+      order.items.map((i) => `${i.qty} x ${i.name}`).join(', '), `Rs ${order.total}`].map(waParam) }] };
+  } else { body.type = 'text'; body.text = { body: text }; }
+  const result = { at: new Date().toISOString(), mode: useTpl ? 'template' : 'text', ok: false, error: '' };
   try {
     const r = await fetch(`https://graph.facebook.com/v20.0/${WA_PHONE_ID}/messages`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messaging_product: 'whatsapp', to: db.settings.ownerWhatsApp.replace(/\D/g, ''), type: 'text', text: { body: text } }),
+      method: 'POST', headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(8000),
     });
-    if (!r.ok) console.error('WhatsApp API error', r.status, await r.text());
-    return r.ok;
-  } catch (e) { console.error('WhatsApp send failed', e.message); return false; }
+    result.ok = r.ok;
+    if (!r.ok) { const t = await r.text(); result.error = ((JSON.parse(t || '{}').error || {}).message || t).slice(0, 300); console.error('WhatsApp API error', r.status, t); }
+  } catch (e) { result.error = e.message; console.error('WhatsApp send failed', e.message); }
+  db.waStatus = result; save();   // shown in Admin > Settings so a failure is never silent
+  return result.ok;
 }
 
 // ---------- SMS to the owner's mobile (optional; needs an SMS provider account, see README) ----------
@@ -354,7 +371,7 @@ app.post('/api/orders', async (req, res) => {
   // The order lands in the Admin panel (Today's Orders). The WhatsApp Cloud API copy is optional and never needed.
   await Promise.allSettled([
     pushOwners({ title: `🔔 New order #${oid(order.id)} · Table ${order.table}`, body: `${order.items.map((i) => i.qty + ' × ' + i.name).join(', ')} — ₹${order.total}`, pending: pendingToday(), tag: 'order-' + order.id }),
-    sendWhatsApp(orderText(order, db.settings, orderLink(req, order))),
+    sendWhatsApp(orderText(order, db.settings, orderLink(req, order)), order),
     sendOrderSms(order),
   ]);
   res.json({ order });

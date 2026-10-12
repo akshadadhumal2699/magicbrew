@@ -51,3 +51,18 @@ Then set these in Vercel > Environment Variables and redeploy:
 The template needs four variables in this order: order number, table number, items, total. Example text:
 `New order #{#var#} Table {#var#}: {#var#}. Total Rs {#var#}`
 SMS failures never stop an order from being placed; they are logged in the Vercel function logs.
+
+
+## Orders to the owner's WhatsApp (automatic)
+When a customer taps Place Order, the server saves the order and sends it to the owner's WhatsApp through the WhatsApp Business Cloud API. Nothing happens on the customer's phone. Each order is its own message: order no., table, customer name + mobile, items with quantities, total.
+Setup (one time, Meta):
+1. developers.facebook.com > create an app (type Business) > add the WhatsApp product, and connect a WhatsApp Business account with a phone number that is NOT already used in the normal WhatsApp app.
+2. Create a permanent System User access token (whatsapp_business_messaging permission). Copy the token and the Phone number ID.
+3. Create a message template (category Utility) with 6 variables and wait for approval, e.g.
+   `New order #{{1}} | Table {{2}}
+Customer: {{3}} ({{4}})
+Items: {{5}}
+Total: {{6}}`
+4. In Vercel > Environment Variables add `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_TEMPLATE_NAME` (and `WHATSAPP_TEMPLATE_LANG`, default `en`), then redeploy.
+5. Admin > Settings: enter the owner's number. Settings shows whether the last send worked, or Meta's error message.
+Without a template, only free text is sent, and Meta delivers that only if the owner messaged the business number within the last 24 hours.
