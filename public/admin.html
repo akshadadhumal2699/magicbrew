@@ -2,6 +2,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Magic Brew · Admin</title>
 <link rel="icon" type="image/png" href="/img/icon-192.png">
+<link rel="manifest" href="/admin.webmanifest">
+<meta name="theme-color" content="#3b2314">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="/img/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="admin.css">
 </head><body>
@@ -265,6 +269,7 @@ const tabCount = (k) => {
   return n ? `<span class="cnt ${k === 'today' ? '' : 'soft'}">${n}</span>` : '';
 };
 const STATUS_LBL = { new: 'New', preparing: 'In progress', ready: 'Ready', completed: 'Completed', cancelled: 'Cancelled', 'payment-reported': 'Customer reported payment' };
+const tableTag = (o) => `<span class="tbl">${o.table ? 'Table ' + esc(o.table) : 'No table'}</span>`;
 const payBadge = (o) => { const p = o.payment.status; return p === 'paid' ? '<span class="badge ok">Paid ✓</span>' : p === 'reported' ? '<span class="badge warn">Customer says paid · verify</span>' : '<span class="badge gray">Unpaid</span>'; };
 const itemsBox = (o) => `<div class="oc-items">${o.items.map((i) => `<div><span>${i.qty} × ${esc(i.name)}</span><span class="muted">${money(i.price * i.qty)}</span></div>`).join('')}</div>${o.notes ? `<div class="oc-note">📝 ${esc(o.notes)}</div>` : ''}`;
 // history falls back to what we know for orders placed before history was recorded
@@ -272,13 +277,13 @@ const historyOf = (o) => o.history && o.history.length ? o.history : [{ status: 
 
 function todayCard(o) {
   const n = o.items.reduce((s, i) => s + i.qty, 0);
-  return `<div class="oc s-new fresh"><div class="oc-h"><div><b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${itime(o.createdAt)} · ${esc(o.customer.mobile)} · ${n} item${n === 1 ? '' : 's'}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  return `<div class="oc s-new fresh"><div class="oc-h"><div>${tableTag(o)}<b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${itime(o.createdAt)} · ${esc(o.customer.mobile)} · ${n} item${n === 1 ? '' : 's'}</div></div><span class="oc-total">${money(o.total)}</span></div>
   <div class="oc-sum">${o.items.map((i) => `${i.qty} × ${esc(i.name)}`).join(', ')}</div>
   <button class="btn fill wide" data-act="open" data-id="${o.id}">Open order</button></div>`;
 }
 function logCard(o, live) {
   const hist = historyOf(o).map((h) => `<li><b>${STATUS_LBL[h.status] || esc(h.status)}</b><span>${idt(h.at)}</span></li>`).join('');
-  return `<div class="oc s-${o.status}"><div class="oc-h"><div><b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${idt(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  return `<div class="oc s-${o.status}"><div class="oc-h"><div>${tableTag(o)}<b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${idt(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
   ${itemsBox(o)}
   <ol class="hist">${hist}</ol>
   <div class="oc-f"><div class="acts"><span class="badge ${STAT_CLS[o.status]}">${STATUS_LBL[o.status]}</span>${payBadge(o)}${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}</div>
@@ -287,7 +292,7 @@ function logCard(o, live) {
 }
 function todayTab() {
   const list = todayNew().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)), old = olderNew().length;
-  return `${old ? `<div class="alert">⚠️ ${old} older order${old === 1 ? ' was' : 's were'} never opened. <button class="btn sm" data-act="tab" data-t="orders">See All Orders</button></div>` : ''}
+  return `${pushCard()}${old ? `<div class="alert">⚠️ ${old} older order${old === 1 ? ' was' : 's were'} never opened. <button class="btn sm" data-act="tab" data-t="orders">See All Orders</button></div>` : ''}
   <div class="sec-t"><h2>${dlabel(istNow())} · ${list.length} waiting</h2></div>
   ${list.map(todayCard).join('') || '<div class="card empty"><span class="big">☕</span>No new orders right now.<br><small>This page updates by itself when a customer orders.</small></div>'}`;
 }
@@ -303,6 +308,43 @@ function doneTab() {
   const days = {}; list.forEach((o) => (days[istDay(o.createdAt)] = days[istDay(o.createdAt)] || []).push(o));
   return Object.keys(days).sort().reverse().map((d) => `<div class="day"><h3>${d === istNow() ? 'Today' : dlabel(d)} <small>· ${dlabel(d)}</small></h3><span>${days[d].length} order${days[d].length === 1 ? '' : 's'} · <b>${money(sum(days[d], (o) => o.total))}</b></span></div>${days[d].map((o) => logCard(o, false)).join('')}`).join('')
     || '<div class="card empty"><span class="big">✅</span>No completed orders yet.</div>';
+}
+
+/* ---------- push notifications (work with the Admin page closed) ---------- */
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushOK = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+let pushSt = 'checking', pushErr = '';   // checking | unsupported | install | denied | off | on
+const b64uToBytes = (b) => Uint8Array.from(atob(b.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(b.length / 4) * 4, '=')), (c) => c.charCodeAt(0));
+async function pushSubscribe(ask) {
+  const reg = await navigator.serviceWorker.ready;
+  if (ask && Notification.permission === 'default') await Notification.requestPermission();
+  if (Notification.permission !== 'granted') return Notification.permission === 'denied' ? 'denied' : 'off';
+  const { key } = await api('/push-key');
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && !sameKey(sub, key)) { await sub.unsubscribe(); sub = null; }
+  sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+  await api('/push-subscribe', { method: 'POST', json: { subscription: sub.toJSON() } });
+  return 'on';
+}
+const sameKey = (sub, key) => { const k = sub.options && sub.options.applicationServerKey; return !k || btoa(String.fromCharCode(...new Uint8Array(k))).split('+').join('-').split('/').join('_').split('=').join('') === key; };
+async function initPush() {
+  if (!pushOK) { pushSt = isIOS && !standalone ? 'install' : 'unsupported'; return; }
+  if (isIOS && !standalone) { pushSt = 'install'; return; }
+  try {
+    await navigator.serviceWorker.register('/sw.js');
+    pushSt = Notification.permission === 'granted' ? await pushSubscribe(false) : Notification.permission === 'denied' ? 'denied' : 'off';
+  } catch (e) { pushSt = 'unsupported'; pushErr = e.message; }
+  if (tab === 'today' && S) draw();
+}
+function pushCard() {
+  const box = (cls, html) => `<div class="card push ${cls}">${html}</div>`;
+  if (pushSt === 'on') return box('ok', `<span>🔔 Order alerts are <b>ON</b> for this phone.</span><button class="btn sm" data-act="pushtest">Send test alert</button>`);
+  if (pushSt === 'off') return box('warn', `<span>🔕 Turn on alerts to hear about new orders even when this page is closed.</span><button class="btn fill" data-act="pushon">Turn on order alerts</button>`);
+  if (pushSt === 'denied') return box('warn', '<span>🔕 Alerts are blocked. Open the browser settings for this site and allow Notifications, then reload.</span>');
+  if (pushSt === 'install') return box('warn', '<span>📲 On iPhone, alerts only work from the Home Screen app: tap <b>Share</b> → <b>Add to Home Screen</b>, open it from there, then turn on alerts.</span>');
+  if (pushSt === 'unsupported') return box('warn', '<span>⚠️ This browser cannot receive background alerts. This page still updates by itself while it is open. On Android use Chrome.</span>');
+  return '';
 }
 
 /* ---------- live updates: badge, title, sound ---------- */
@@ -353,7 +395,7 @@ const STAT_CLS = { new: 'warn', preparing: 'info', ready: 'ok', completed: 'gray
 function orderCard(o) {
   const p = o.payment.status, nx = NEXT[o.status];
   const pb = p === 'paid' ? '<span class="badge ok">Paid ✓</span>' : p === 'reported' ? '<span class="badge warn">Customer says paid · verify</span>' : '<span class="badge gray">Unpaid</span>';
-  return `<div class="oc s-${o.status}"><div class="oc-h"><div><b>#${String(o.id).padStart(2, '0')} · ${esc(o.customer.name)}</b><div class="oc-meta">${ftime(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  return `<div class="oc s-${o.status}"><div class="oc-h"><div>${tableTag(o)}<b>#${String(o.id).padStart(2, '0')} · ${esc(o.customer.name)}</b><div class="oc-meta">${ftime(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
   <div class="oc-items">${o.items.map((i) => `<div><span>${i.qty} × ${esc(i.name)}</span><span class="muted">${money(i.price * i.qty)}</span></div>`).join('')}</div>
   ${o.notes ? `<div class="oc-note">📝 ${esc(o.notes)}</div>` : ''}
   <div class="oc-f"><div class="acts"><span class="badge ${STAT_CLS[o.status]}">${o.status}</span>${pb}${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}</div>
@@ -557,6 +599,8 @@ const ACT = {
   // orders
   os: async (el) => { await putOrder(el.dataset.id, { status: el.dataset.s }); if (el.dataset.s === 'completed') flash('Moved to Completed ✓'); },
   // opening a new order moves it from Today's Orders to Order Logs
+  pushon: async () => { try { pushSt = await pushSubscribe(true); } catch (e) { pushSt = 'off'; alert('Could not turn on alerts: ' + e.message); } draw(); if (pushSt === 'on') flash('Order alerts are on ✓'); },
+  pushtest: async () => { await api('/push-test', { method: 'POST' }); flash('Test alert sent'); },
   open: async (el) => { await api('/orders/' + el.dataset.id, { method: 'PUT', json: { status: 'preparing' } }); tab = 'logs'; window.scrollTo(0, 0); flash('Moved to Order Logs'); await refresh(); },
   pay: (el) => putOrder(el.dataset.id, { paymentStatus: 'paid' }),
   clearorders: async () => {
@@ -671,6 +715,7 @@ document.addEventListener('input', (e) => {
     } catch {}
   }
   refresh();
+  initPush();
 })();
 // live order updates every 5s (only repaints when orders actually changed); also catch up when the app is reopened
 setInterval(() => { if (!document.hidden) poll().catch(() => {}); }, 5000);

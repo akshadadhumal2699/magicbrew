@@ -1,6 +1,6 @@
 const $app = document.getElementById('app');
 let menu = null, menuJson = '', cart = JSON.parse(localStorage.getItem('cart') || '{}'), view = 'menu', activeCat = null, order = null;
-let form = { name: localStorage.getItem('cname') || '', mobile: localStorage.getItem('cmobile') || '', notes: '' };
+let form = { name: localStorage.getItem('cname') || '', mobile: localStorage.getItem('cmobile') || '', table: sessionStorage.getItem('ctable') || '', notes: '' };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const cur = () => menu.settings.currency;
 const api = async (url, opt) => {
@@ -233,15 +233,18 @@ function cartView() {
 function detailsView(err = '') {
   return `<div class="page"><button class="back" data-go="cart">← Cart</button><h2>Your Details</h2>
   <div class="panel"><label>Name</label><input id="f-name" value="${esc(form.name)}" autocomplete="name" placeholder="Your name">
+  <label>Table number <span style="color:#c0392b">*</span></label><input id="f-table" value="${esc(form.table)}" maxlength="10" autocomplete="off" placeholder="e.g. 5" required>
   <label>Mobile number</label><input id="f-mobile" value="${esc(form.mobile)}" inputmode="numeric" maxlength="10" autocomplete="tel" placeholder="10-digit mobile">
-  <label>Notes for the kitchen (optional)</label><textarea id="f-notes" rows="2" placeholder="Less spicy, table no. etc.">${esc(form.notes)}</textarea></div>
+  <label>Notes for the kitchen (optional)</label><textarea id="f-notes" rows="2" placeholder="Less spicy, extra cheese, etc.">${esc(form.notes)}</textarea></div>
   <div class="panel"><b>Order summary</b>${cartLines().map(({ it, qty }) => `<div class="line"><span>${qty} × ${esc(it.name)}</span><span>${cur()}${it.price * qty}</span></div>`).join('')}
   <div class="line total"><span>Total</span><span>${cur()}${cartTotal()}</span></div></div>
   <div class="err" id="err">${esc(err)}</div><button class="primary" id="place">Place Order · ${cur()}${cartTotal()}</button></div>`;
 }
 
 async function placeOrder() {
-  form = { name: document.getElementById('f-name').value, mobile: document.getElementById('f-mobile').value, notes: document.getElementById('f-notes').value };
+  form = { name: document.getElementById('f-name').value, mobile: document.getElementById('f-mobile').value, table: document.getElementById('f-table').value.trim(), notes: document.getElementById('f-notes').value };
+  if (!form.table) return void ($app.innerHTML = detailsView('Please enter your table number'));
+  sessionStorage.setItem('ctable', form.table);
   const btn = document.getElementById('place');
   btn.disabled = true;
   btn.textContent = 'Placing…';
@@ -267,7 +270,7 @@ function orderSummary(o) {
 
 function confirmView() {
   return `<div class="page center"><div class="big">✅</div><h2>Order Placed!</h2>
-  <p>Order <b>#${String(order.id).padStart(2, '0')}</b> for ${esc(order.customer.name)}</p>
+  <p>Order <b>#${String(order.id).padStart(2, '0')}</b> for ${esc(order.customer.name)}${order.table ? ` · <b>Table ${esc(order.table)}</b>` : ''}</p>
   <p class="muted2">The café has received your order and will start preparing it.</p>
   <div style="text-align:left">${orderSummary(order)}</div>
   <div><div class="panel" style="text-align:left"><b>Your order link</b><small style="display:block;color:var(--muted);margin:2px 0 8px">Keep it to check your order and pay the bill any time.</small>
@@ -276,22 +279,44 @@ function confirmView() {
     <p><a href="#" data-go="status">View order status</a> · <a href="#" data-go="menu">Back to menu</a></p></div></div>`;
 }
 
-// Open Google Pay directly (the generic upi:// link lets Android pick any app, WhatsApp included)
-function gpayLink(upiLink) {
+// UPI apps the customer can pick. Android opens the chosen app directly with an intent link; iPhone uses
+// each app's own scheme; anything else falls back to the generic upi:// link (the phone's own chooser).
+const UPI_APPS = [
+  { id: 'gpay', name: 'Google Pay', icon: '🟦', pkg: 'com.google.android.apps.nbu.paisa.user', ios: 'gpay://upi/pay' },
+  { id: 'phonepe', name: 'PhonePe', icon: '🟪', pkg: 'com.phonepe.app', ios: 'phonepe://pay' },
+  { id: 'paytm', name: 'Paytm', icon: '🟦', pkg: 'net.one97.paytm', ios: 'paytmmp://pay' },
+  { id: 'bhim', name: 'BHIM', icon: '🟧', pkg: 'in.org.npci.upiapp', ios: 'upi://pay' },
+];
+function upiAppLink(upiLink, app) {
   const q = upiLink.split('?')[1] || '';
-  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) return 'gpay://upi/pay?' + q;
-  if (/Android/i.test(navigator.userAgent)) return `intent://pay?${q}#Intent;scheme=upi;package=com.google.android.apps.nbu.paisa.user;end`;
+  if (!app) return upiLink;
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) return app.ios + '?' + q;
+  if (/Android/i.test(navigator.userAgent)) return `intent://pay?${q}#Intent;scheme=upi;package=${app.pkg};end`;
   return upiLink;
 }
+function upiChooser(upiLink) {
+  document.querySelector('.modal')?.remove();
+  const m = document.createElement('div');
+  m.className = 'modal';
+  m.innerHTML = `<div class="sheet"><div class="in"><h2>Pay with UPI App</h2>
+    <p style="color:var(--muted);margin:4px 0 12px">Choose your app. After paying, come back to this page and tap <b>I've paid</b>.</p>
+    ${UPI_APPS.map((a) => `<a class="ghost upi-app" style="display:flex;align-items:center;gap:12px;text-decoration:none;margin-bottom:10px;text-align:left" href="${esc(upiAppLink(upiLink, a))}">${a.icon} <span>${a.name}</span></a>`).join('')}
+    <a class="ghost upi-app" style="display:flex;align-items:center;gap:12px;text-decoration:none;margin-bottom:10px" href="${esc(upiLink)}">📱 <span>Other UPI app</span></a>
+    <small style="display:block;color:var(--muted);margin-bottom:10px">If nothing opens, that app isn't installed on this phone — pick another one.</small>
+    <button class="primary" data-close>Back to my order</button></div></div>`;
+  m.onclick = (e) => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  document.body.appendChild(m);
+}
+let upiLinkNow = '';
 async function payView() {
   $app.innerHTML = '<div class="page center"><p>Loading payment…</p></div>';
   const p = await api(`/api/orders/${order.id}/pay${tq()}`);
   const qr = p.uploadedQr || p.qr;
+  upiLinkNow = p.upiLink || '';
   const body = qr
     ? `<img class="qrimg" src="${esc(qr)}" alt="Payment QR">
       <p style="margin:8px 0"><b>${cur()}${order.total}</b> to ${esc(menu.settings.upiName)}</p>
-      ${p.upiLink ? `<a class="primary" style="display:block;text-decoration:none;margin-bottom:10px" href="${esc(gpayLink(p.upiLink))}">Pay with Google Pay</a>
-      <a href="${esc(p.upiLink)}" style="display:block;margin-bottom:10px;font-size:.85rem">Use another UPI app</a>` : ''}
+      ${p.upiLink ? `<button class="primary" style="margin-bottom:10px" id="upi">Pay with UPI App</button>` : ''}
       ${p.upiId ? `<small style="color:var(--muted)">UPI ID: ${esc(p.upiId)}</small>` : ''}`
     : `<p>The café hasn't set up online payment yet. Please pay at the counter.</p>`;
   $app.innerHTML = `<div class="page center"><button class="back" style="float:left" data-go="confirm">← Back</button><h2 style="clear:both">Pay the Bill</h2>
@@ -315,7 +340,7 @@ async function statusView() {
   catch (e) { localStorage.removeItem('lastOrder'); localStorage.removeItem('lastOrderTok'); return go('menu'); }
   const st = { new: 'Received', preparing: 'Being prepared 👨‍🍳', ready: 'Ready 🎉', completed: 'Completed', cancelled: 'Cancelled' }[order.status];
   const ps = order.payment.status;
-  $app.innerHTML = `<div class="page"><button class="back" data-go="menu">← Menu</button><h2>Order #${String(order.id).padStart(2, '0')}</h2>
+  $app.innerHTML = `<div class="page"><button class="back" data-go="menu">← Menu</button><h2>Order #${String(order.id).padStart(2, '0')}${order.table ? ` · Table ${esc(order.table)}` : ''}</h2>
   <div class="panel"><div class="line"><span>Order status</span><span class="badge">${st}</span></div>
   <div class="line"><span>Payment</span><span class="badge ${ps === 'paid' ? 'ok' : ''}">${ps === 'paid' ? 'Paid ✓' : ps === 'reported' ? 'Awaiting café confirmation' : 'Unpaid'}</span></div>
   ${order.payment.txnId ? `<div class="line"><span>Transaction ID</span><span>${esc(order.payment.txnId)}</span></div>` : ''}</div>
@@ -344,7 +369,7 @@ document.addEventListener('click', (e) => {
     if (k === 'see') { const id = lb.dataset.target; closeLB(); return scrollToEl(document.getElementById(id)); }
   }
   if (e.target.id === 'totop') return window.scrollTo({ top: 0, behavior: 'smooth' });
-  const t = e.target.closest('[data-q],[data-go],[data-cat],[data-open],[data-track],[data-poster],[data-rail],[data-slide],[data-jump],[data-copy],#place,#paid');
+  const t = e.target.closest('[data-q],[data-go],[data-cat],[data-open],[data-track],[data-poster],[data-rail],[data-slide],[data-jump],[data-copy],#place,#paid,#upi');
   if (!t) return;
   if (t.dataset.q) return setQty(t.dataset.q, +t.dataset.d);
   if (t.dataset.open) return itemModal(t.dataset.open);
@@ -367,6 +392,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.go) { e.preventDefault(); return go(t.dataset.go); }
   if (t.id === 'place') return placeOrder();
   if (t.id === 'paid') return markPaid();
+  if (t.id === 'upi') return upiChooser(upiLinkNow);
 });
 document.addEventListener('input', (e) => { if (e.target.id === 'q') filterMenu(e.target.value); });
 document.addEventListener('keydown', (e) => {

@@ -83,6 +83,29 @@ const save = () => { dirty = true; };   // flushed just before each response is 
 const oid = (id) => String(id).padStart(2, '0');   // display form: 01, 02 … 100
 const uid = (p) => p + crypto.randomBytes(4).toString('hex');
 
+// ---------- push notifications (chef's phone, even when the Admin page is closed) ----------
+// VAPID keys are derived from a server secret, so they never change between deploys/instances
+// (a changed key would silently break every existing subscription).
+const webpush = require('web-push');
+function vapidKeys() {
+  const seed = crypto.createHash('sha256').update('mb-vapid|' + (process.env.SESSION_SECRET || REDIS_TOKEN || ADMIN_PASSWORD)).digest();
+  const ecdh = crypto.createECDH('prime256v1'); ecdh.setPrivateKey(seed);
+  const b64u = (b) => b.toString('base64url');
+  return { publicKey: b64u(ecdh.getPublicKey()), privateKey: b64u(seed) };
+}
+const VAPID = vapidKeys();
+webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@magicbrew.example', VAPID.publicKey, VAPID.privateKey);
+const istDay = (iso) => new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+const pendingToday = () => db.orders.filter((o) => o.status === 'new' && istDay(o.createdAt) === todayIST()).length;
+async function pushOwners(payload) {
+  const subs = db.pushSubs || [];
+  if (!subs.length) return;
+  const dead = new Set();
+  await Promise.allSettled(subs.map((sub) => webpush.sendNotification(sub, JSON.stringify(payload), { TTL: 3600, urgency: 'high', timeout: 6000 })
+    .catch((e) => { if (e.statusCode === 404 || e.statusCode === 410) dead.add(sub.endpoint); else console.error('push failed', e.statusCode || e.message); })));
+  if (dead.size) { db.pushSubs = subs.filter((s) => !dead.has(s.endpoint)); save(); }
+}
+
 // ---------- app ----------
 const app = express();
 app.use(express.json());
@@ -93,9 +116,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', async (req, res, next) => {
   try {
     await loadDb();
-    if (db.settings.ownerMobile !== undefined || db.pushSubs || db.vapid) {   // undo last night's renamed field / leftovers
+    if (db.settings.ownerMobile !== undefined || db.vapid) {   // undo an old renamed field / leftovers
       db.settings.ownerWhatsApp = db.settings.ownerWhatsApp || db.settings.ownerMobile || '';
-      delete db.settings.ownerMobile; delete db.pushSubs; delete db.vapid; dirty = true;
+      delete db.settings.ownerMobile; delete db.vapid; dirty = true;
     }
     const json = res.json.bind(res);
     res.json = (body) => { persist().then(() => json(body), (e) => { console.error(e); res.status(500); json({ error: 'Could not save changes' }); }); return res; };
@@ -221,6 +244,7 @@ function orderText(o, s, link) {
   const lines = o.items.map((i) => `${i.qty} × ${i.name} – ${s.currency}${i.price * i.qty}`);
   return [
     `*New Order #${oid(o.id)}*`,
+    `Table: ${o.table || '-'}`,
     `Customer: ${o.customer.name}`,
     `Mobile: ${o.customer.mobile}`,
     o.notes ? `Note: ${o.notes}` : null,
@@ -271,10 +295,12 @@ async function sendWhatsApp(text) {
 }
 
 app.post('/api/orders', async (req, res) => {
-  const { name, mobile, notes, cart } = req.body || {};
+  const { name, mobile, notes, cart, table } = req.body || {};
+  const cleanTable = String(table || '').trim().slice(0, 10);
   const cleanName = String(name || '').trim().slice(0, 60);
   const cleanMobile = String(mobile || '').replace(/\D/g, '').slice(-10);
   if (!cleanName) return res.status(400).json({ error: 'Please enter your name' });
+  if (!cleanTable) return res.status(400).json({ error: 'Please enter your table number' });
   if (!/^[6-9]\d{9}$/.test(cleanMobile)) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number' });
   if (!Array.isArray(cart) || !cart.length) return res.status(400).json({ error: 'Your cart is empty' });
 
@@ -287,7 +313,7 @@ app.post('/api/orders', async (req, res) => {
     lines.push({ id: it.id, name: it.name, price: effectivePrice(it), qty });
   }
   const order = {
-    id: db.nextOrderId++, token: crypto.randomBytes(6).toString('hex'), customer: { name: cleanName, mobile: cleanMobile },
+    id: db.nextOrderId++, token: crypto.randomBytes(6).toString('hex'), customer: { name: cleanName, mobile: cleanMobile }, table: cleanTable,
     notes: String(notes || '').trim().slice(0, 200), items: lines,
     total: lines.reduce((s, l) => s + l.price * l.qty, 0),
     status: 'new', payment: { status: 'unpaid', txnId: '' },
@@ -297,7 +323,10 @@ app.post('/api/orders', async (req, res) => {
   db.orders.unshift(order);
   save();
   // The order lands in the Admin panel (Today's Orders). The WhatsApp Cloud API copy is optional and never needed.
-  await sendWhatsApp(orderText(order, db.settings, orderLink(req, order)));
+  await Promise.allSettled([
+    pushOwners({ title: `🔔 New order #${oid(order.id)} · Table ${order.table}`, body: `${order.items.map((i) => i.qty + ' × ' + i.name).join(', ')} — ₹${order.total}`, pending: pendingToday(), tag: 'order-' + order.id }),
+    sendWhatsApp(orderText(order, db.settings, orderLink(req, order))),
+  ]);
   res.json({ order });
 });
 
@@ -335,7 +364,22 @@ app.post('/api/orders/:id/payment', async (req, res) => {
 const admin = express.Router();
 admin.use(auth);
 
-admin.get('/state', (req, res) => res.json({ ...db, orders: db.orders, sessionsOk: true, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID) }));
+admin.get('/push-key', (req, res) => res.json({ key: VAPID.publicKey, subscribers: (db.pushSubs || []).length }));
+admin.post('/push-subscribe', (req, res) => {
+  const s = req.body && req.body.subscription;
+  if (!s || !String(s.endpoint || '').startsWith('https://') || !s.keys) return res.status(400).json({ error: 'Invalid subscription' });
+  db.pushSubs = (db.pushSubs || []).filter((x) => x.endpoint !== s.endpoint);
+  db.pushSubs.push({ endpoint: s.endpoint, keys: { p256dh: String(s.keys.p256dh), auth: String(s.keys.auth) } });
+  save(); res.json({ ok: true });
+});
+admin.post('/push-unsubscribe', (req, res) => {
+  db.pushSubs = (db.pushSubs || []).filter((x) => x.endpoint !== (req.body && req.body.endpoint)); save(); res.json({ ok: true });
+});
+admin.post('/push-test', async (req, res) => {
+  await pushOwners({ title: '✅ Alerts are on', body: 'You will be notified here when a new order arrives.', pending: pendingToday(), tag: 'test' });
+  res.json({ ok: true });
+});
+admin.get('/state', (req, res) => { const { pushSubs, ...pub } = db; res.json({ ...pub, orders: db.orders, sessionsOk: true, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID) }); });
 
 admin.put('/settings', (req, res) => {
   const allowed = ['cafeName', 'tagline', 'ownerName', 'ownerWhatsApp', 'upiId', 'upiName', 'publicUrl', 'currency'];
@@ -470,11 +514,7 @@ admin.put('/expenses/:id', (req, res) => {
 admin.delete('/expenses/:id', (req, res) => { db.expenses = db.expenses.filter((e) => e.id !== req.params.id); save(); res.json({ ok: true }); });
 
 // Lightweight feed the Admin panel polls every few seconds: orders + how many are waiting today (IST).
-const istDay = (iso) => new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-admin.get('/orders-feed', (req, res) => {
-  const t = todayIST();
-  res.json({ orders: db.orders, pending: db.orders.filter((o) => o.status === 'new' && istDay(o.createdAt) === t).length });
-});
+admin.get('/orders-feed', (req, res) => res.json({ orders: db.orders, pending: pendingToday() }));
 admin.put('/orders/:id', (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
