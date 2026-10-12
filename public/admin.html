@@ -582,6 +582,8 @@ function settings() {
   const s = S.settings;
   return `<div class="card"><label>Café name</label><input id="s-cafeName" value="${esc(s.cafeName)}"><label>Tagline</label><input id="s-tagline" value="${esc(s.tagline)}">
   <label>Public menu URL (for the QR code, e.g. https://menu.magicbrew.in)</label><input id="s-publicUrl" value="${esc(s.publicUrl)}"></div>
+  <div class="card"><h3>SMS alert for new orders</h3><label>Chef/owner mobile number (10 digits)</label><input id="s-ownerSms" value="${esc(s.ownerSms || '')}" inputmode="numeric" maxlength="10">
+  <small>${S.smsApi ? '✅ SMS service is connected: this number gets an SMS with the order no., table, items and total for every new order.' : 'SMS service not connected yet. Save the number now; SMS starts once the SMS account is added on the server (see README).'}</small></div>
   <div class="card"><h3>WhatsApp (optional)</h3><label>Owner/chef WhatsApp number (with country code, e.g. 919876543210)</label><input id="s-ownerWhatsApp" value="${esc(s.ownerWhatsApp)}" inputmode="numeric">
   <small>Orders now arrive in “Today's Orders” and don't need WhatsApp. ${S.whatsappApi ? 'The WhatsApp Cloud API is configured, so a copy is also sent there.' : 'Only used if the WhatsApp Cloud API is set up on the server.'}</small></div>
   <div class="card"><h3>Payment</h3><label>UPI ID (e.g. magicbrew@okhdfc)</label><input id="s-upiId" value="${esc(s.upiId)}"><label>Payee name</label><input id="s-upiName" value="${esc(s.upiName)}">
@@ -673,7 +675,7 @@ const ACT = {
   printqr: () => { const w = window.open(''); w.document.write(`<body style="text-align:center;font-family:Georgia"><h1>${esc(S.settings.cafeName)}</h1><h2>Scan to view menu & order</h2><img src="${qrData.qr}" style="width:420px"><p>${esc(qrData.url)}</p></body>`); w.document.close(); w.print(); },
   rmqr: async () => { await api('/settings/payment-qr', { method: 'DELETE' }); refresh(); },
   's-save': async () => {
-    const b = body(), json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerWhatsApp', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
+    const b = body(), json = {}; ['cafeName', 'tagline', 'publicUrl', 'ownerWhatsApp', 'ownerSms', 'upiId', 'upiName'].forEach((k) => (json[k] = b.querySelector('#s-' + k).value));
     await api('/settings', { method: 'PUT', json });
     const f = b.querySelector('#s-qr').files[0];
     if (f) { const fd = new FormData(); fd.append('image', f); await api('/settings/payment-qr', { method: 'POST', body: fd }); }

@@ -38,3 +38,16 @@ Do NOT set ADMIN_LOCAL_LOGIN on Vercel.
 ## 4-digit PIN login (no typing)
 Set `ADMIN_PIN` (exactly 4 digits, e.g. `4821`) in Vercel > Environment Variables and redeploy. The login page shows a number keypad; the phone stays logged in for 30 days.
 5 wrong tries lock login for 15 minutes.
+
+
+## SMS alert to the chef (optional)
+Every new order can also send an SMS (order no., table, items, total) to the number saved in Admin > Settings > SMS alert.
+Indian rules (TRAI DLT) require a registered sender ID and an approved message template for business SMS, so first create an account with an Indian SMS provider and complete DLT registration.
+Then set these in Vercel > Environment Variables and redeploy:
+- `SMS_PROVIDER` = `fast2sms` or `msg91`
+- `SMS_API_KEY` = the provider's API/auth key
+- `SMS_TEMPLATE_ID` = the approved template id (MSG91: required; Fast2SMS: required for the DLT route, leave empty to use its non-DLT "quick" route)
+- `SMS_SENDER_ID` = your DLT sender id (Fast2SMS DLT route)
+The template needs four variables in this order: order number, table number, items, total. Example text:
+`New order #{#var#} Table {#var#}: {#var#}. Total Rs {#var#}`
+SMS failures never stop an order from being placed; they are logged in the Vercel function logs.

@@ -294,6 +294,35 @@ async function sendWhatsApp(text) {
   } catch (e) { console.error('WhatsApp send failed', e.message); return false; }
 }
 
+// ---------- SMS to the owner's mobile (optional; needs an SMS provider account, see README) ----------
+// SMS_PROVIDER=fast2sms|msg91, SMS_API_KEY, and for India's DLT rules SMS_TEMPLATE_ID (+ SMS_SENDER_ID for Fast2SMS).
+// Template variables are sent in this order: order no, table, items, total.
+const SMS_PROVIDER = (process.env.SMS_PROVIDER || '').toLowerCase(), SMS_KEY = process.env.SMS_API_KEY || '';
+const SMS_TEMPLATE = process.env.SMS_TEMPLATE_ID || '', SMS_SENDER = process.env.SMS_SENDER_ID || '';
+const smsConfigured = () => !!(SMS_PROVIDER && SMS_KEY && db.settings.ownerSms);
+async function sendOrderSms(o) {
+  if (!smsConfigured()) return false;
+  const to = String(db.settings.ownerSms).replace(/D/g, '').slice(-10);
+  if (to.length !== 10) return false;
+  const items = o.items.map((i) => `${i.qty} x ${i.name}`).join(', ').slice(0, 120);
+  const vars = [oid(o.id), o.table || '-', items, String(o.total)];
+  const text = `New order #${vars[0]} Table ${vars[1]}: ${items}. Total Rs ${vars[3]}`;
+  try {
+    let r;
+    if (SMS_PROVIDER === 'fast2sms') {
+      const body = SMS_TEMPLATE
+        ? { route: 'dlt', sender_id: SMS_SENDER, message: SMS_TEMPLATE, variables_values: vars.join('|'), numbers: to, flash: 0 }
+        : { route: 'q', message: text, numbers: to, flash: 0 };
+      r = await fetch('https://www.fast2sms.com/dev/bulkV2', { method: 'POST', headers: { authorization: SMS_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) });
+    } else if (SMS_PROVIDER === 'msg91') {
+      r = await fetch('https://control.msg91.com/api/v5/flow', { method: 'POST', headers: { authkey: SMS_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: SMS_TEMPLATE, short_url: '0', recipients: [{ mobiles: '91' + to, var1: vars[0], var2: vars[1], var3: vars[2], var4: vars[3] }] }), signal: AbortSignal.timeout(6000) });
+    } else return false;
+    if (!r.ok) console.error('SMS error', r.status, (await r.text()).slice(0, 300));
+    return r.ok;
+  } catch (e) { console.error('SMS failed', e.message); return false; }
+}
+
 app.post('/api/orders', async (req, res) => {
   const { name, mobile, notes, cart, table } = req.body || {};
   const cleanTable = String(table || '').trim().slice(0, 10);
@@ -326,6 +355,7 @@ app.post('/api/orders', async (req, res) => {
   await Promise.allSettled([
     pushOwners({ title: `🔔 New order #${oid(order.id)} · Table ${order.table}`, body: `${order.items.map((i) => i.qty + ' × ' + i.name).join(', ')} — ₹${order.total}`, pending: pendingToday(), tag: 'order-' + order.id }),
     sendWhatsApp(orderText(order, db.settings, orderLink(req, order))),
+    sendOrderSms(order),
   ]);
   res.json({ order });
 });
@@ -375,10 +405,10 @@ admin.post('/push-subscribe', (req, res) => {
 admin.post('/push-unsubscribe', (req, res) => {
   db.pushSubs = (db.pushSubs || []).filter((x) => x.endpoint !== (req.body && req.body.endpoint)); save(); res.json({ ok: true });
 });
-admin.get('/state', (req, res) => { const { pushSubs, ...pub } = db; res.json({ ...pub, orders: db.orders, sessionsOk: true, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID) }); });
+admin.get('/state', (req, res) => { const { pushSubs, ...pub } = db; res.json({ ...pub, orders: db.orders, sessionsOk: true, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID), smsApi: !!(SMS_PROVIDER && SMS_KEY) }); });
 
 admin.put('/settings', (req, res) => {
-  const allowed = ['cafeName', 'tagline', 'ownerName', 'ownerWhatsApp', 'upiId', 'upiName', 'publicUrl', 'currency'];
+  const allowed = ['cafeName', 'tagline', 'ownerName', 'ownerWhatsApp', 'upiId', 'upiName', 'publicUrl', 'currency', 'ownerSms'];
   for (const k of allowed) if (k in req.body) db.settings[k] = String(req.body[k]).trim();
   save(); res.json(db.settings);
 });
