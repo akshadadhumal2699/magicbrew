@@ -335,11 +335,16 @@ async function initPush() {
     await navigator.serviceWorker.register('/sw.js');
     pushSt = Notification.permission === 'granted' ? await pushSubscribe(false) : Notification.permission === 'denied' ? 'denied' : 'off';
   } catch (e) { pushSt = 'unsupported'; pushErr = e.message; }
+  if (pushSt === 'off') document.addEventListener('click', async () => {
+    if (pushSt !== 'off') return;
+    try { pushSt = await pushSubscribe(true); } catch { pushSt = 'off'; }
+    if (S) draw();
+  }, { once: true });
   if (tab === 'today' && S) draw();
 }
 function pushCard() {
   const box = (cls, html) => `<div class="card push ${cls}">${html}</div>`;
-  if (pushSt === 'on') return box('ok', `<span>🔔 Order alerts are <b>ON</b> for this phone.</span><button class="btn sm" data-act="pushtest">Send test alert</button>`);
+  if (pushSt === 'on') return box('ok', `<span>🔔 Order alerts are <b>ON</b>: new orders ring this phone automatically.</span>`);
   if (pushSt === 'off') return box('warn', `<span>🔕 Turn on alerts to hear about new orders even when this page is closed.</span><button class="btn fill" data-act="pushon">Turn on order alerts</button>`);
   if (pushSt === 'denied') return box('warn', '<span>🔕 Alerts are blocked. Open the browser settings for this site and allow Notifications, then reload.</span>');
   if (pushSt === 'install') return box('warn', '<span>📲 On iPhone, alerts only work from the Home Screen app: tap <b>Share</b> → <b>Add to Home Screen</b>, open it from there, then turn on alerts.</span>');
@@ -369,7 +374,15 @@ function noteOrders(orders) {
   knownIds = new Set(orders.map((o) => o.id));
   if (fresh.length) { beep(); flash(`🔔 ${fresh.length} new order${fresh.length === 1 ? '' : 's'}`); }
 }
+async function clearHandled() {
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const open = new Set(S.orders.filter((o) => o.status === 'new').map((o) => 'order-' + o.id));
+    (await reg.getNotifications()).forEach((x) => { if (x.tag.startsWith('order-') && !open.has(x.tag)) x.close(); });
+  } catch {}
+}
 function syncAlerts() {
+  if (S && pushOK) clearHandled();
   const n = S ? todayNew().length : 0;
   document.title = (n ? `(${n}) ` : '') + 'Magic Brew · Admin';
   try { n ? navigator.setAppBadge && navigator.setAppBadge(n) : navigator.clearAppBadge && navigator.clearAppBadge(); } catch {}
@@ -600,7 +613,6 @@ const ACT = {
   os: async (el) => { await putOrder(el.dataset.id, { status: el.dataset.s }); if (el.dataset.s === 'completed') flash('Moved to Completed ✓'); },
   // opening a new order moves it from Today's Orders to Order Logs
   pushon: async () => { try { pushSt = await pushSubscribe(true); } catch (e) { pushSt = 'off'; alert('Could not turn on alerts: ' + e.message); } draw(); if (pushSt === 'on') flash('Order alerts are on ✓'); },
-  pushtest: async () => { await api('/push-test', { method: 'POST' }); flash('Test alert sent'); },
   open: async (el) => { await api('/orders/' + el.dataset.id, { method: 'PUT', json: { status: 'preparing' } }); tab = 'logs'; window.scrollTo(0, 0); flash('Moved to Order Logs'); await refresh(); },
   pay: (el) => putOrder(el.dataset.id, { paymentStatus: 'paid' }),
   clearorders: async () => {

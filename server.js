@@ -375,10 +375,6 @@ admin.post('/push-subscribe', (req, res) => {
 admin.post('/push-unsubscribe', (req, res) => {
   db.pushSubs = (db.pushSubs || []).filter((x) => x.endpoint !== (req.body && req.body.endpoint)); save(); res.json({ ok: true });
 });
-admin.post('/push-test', async (req, res) => {
-  await pushOwners({ title: '✅ Alerts are on', body: 'You will be notified here when a new order arrives.', pending: pendingToday(), tag: 'test' });
-  res.json({ ok: true });
-});
 admin.get('/state', (req, res) => { const { pushSubs, ...pub } = db; res.json({ ...pub, orders: db.orders, sessionsOk: true, whatsappApi: !!(WA_TOKEN && WA_PHONE_ID) }); });
 
 admin.put('/settings', (req, res) => {
