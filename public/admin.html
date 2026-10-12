@@ -212,7 +212,7 @@ function draw() {
   R.innerHTML = `<div class="app"><aside class="side"><div class="brand"><span class="logo">☕</span><div><b>${esc(S.settings.cafeName)}</b><small>Admin panel</small></div></div>
   <nav class="nav">${TABS.map(([k, ic, l]) => `<button class="nb ${k === 'today' ? 'hot' : ''} ${tab === k ? 'on' : ''}" data-act="tab" data-t="${k}"><span class="ic">${ic}</span>${l}${tabCount(k)}</button>`).join('')}</nav>
   <div class="spacer"></div><button class="logout" data-act="logout">Log out</button></aside>
-  <main class="main"><div class="ph"><div><h1>${cur_[2]}</h1><p>${cur_[3]}</p></div><div id="ph-r"></div></div><div id="body">${VIEWS()[tab]()}</div></main></div>`;
+  <main class="main"><div id="newbar">${newBarHtml()}</div><div class="ph"><div><h1>${cur_[2]}</h1><p>${cur_[3]}</p></div><div id="ph-r"></div></div><div id="body">${VIEWS()[tab]()}</div></main></div>`;
   const hook = AFTER[tab]; if (hook) hook(document.getElementById('body'));
   syncAlerts();
 }
@@ -277,7 +277,7 @@ const historyOf = (o) => o.history && o.history.length ? o.history : [{ status: 
 
 function todayCard(o) {
   const n = o.items.reduce((s, i) => s + i.qty, 0);
-  return `<div class="oc s-new fresh"><div class="oc-h"><div>${tableTag(o)}<b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${itime(o.createdAt)} · ${esc(o.customer.mobile)} · ${n} item${n === 1 ? '' : 's'}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  return `<div class="oc s-new fresh ${justIn.has(o.id) ? 'just' : ''}"><div class="oc-h"><div>${tableTag(o)}<b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${itime(o.createdAt)} · ${esc(o.customer.mobile)} · ${n} item${n === 1 ? '' : 's'}</div></div><span class="oc-total">${money(o.total)}</span></div>
   <div class="oc-sum">${o.items.map((i) => `${i.qty} × ${esc(i.name)}`).join(', ')}</div>
   <button class="btn fill wide" data-act="open" data-id="${o.id}">Open order</button></div>`;
 }
@@ -291,9 +291,9 @@ function logCard(o, live) {
   ${live ? `<button class="btn fill done-btn" data-act="os" data-id="${o.id}" data-s="completed">✓ Complete</button>` : ''}</div></div></div>`;
 }
 function todayTab() {
-  const list = todayNew().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)), old = olderNew().length;
+  const list = todayNew().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), old = olderNew().length;
   return `${pushCard()}${old ? `<div class="alert">⚠️ ${old} older order${old === 1 ? ' was' : 's were'} never opened. <button class="btn sm" data-act="tab" data-t="orders">See All Orders</button></div>` : ''}
-  <div class="sec-t"><h2>${dlabel(istNow())} · ${list.length} waiting</h2></div>
+  <div class="newhead ${list.length ? 'on' : ''}"><h2>🔔 NEW ORDER</h2><span class="nbadge">${list.length}</span><small>${dlabel(istNow())} · newest first</small></div>
   ${list.map(todayCard).join('') || '<div class="card empty"><span class="big">☕</span>No new orders right now.<br><small>This page updates by itself when a customer orders.</small></div>'}`;
 }
 function logsTab() {
@@ -310,6 +310,14 @@ function doneTab() {
     || '<div class="card empty"><span class="big">✅</span>No completed orders yet.</div>';
 }
 
+// compact "NEW ORDER" alert shown at the very top of every other tab
+function newBarHtml() {
+  const list = S ? todayNew().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) : [];
+  if (!list.length || tab === 'today') return '';
+  return `<div class="newbar"><div class="nb-h"><b>🔔 NEW ORDER</b><span class="nbadge">${list.length}</span><button class="btn sm" data-act="tab" data-t="today">View all</button></div>
+  ${list.slice(0, 3).map((o) => `<div class="nb-o"><div>${tableTag(o)}<b>#${pad(o.id)}</b> <small>${o.items.map((i) => i.qty + ' × ' + esc(i.name)).join(', ')}</small></div><span class="nb-r"><b>${money(o.total)}</b><button class="btn sm fill" data-act="open" data-id="${o.id}">Open</button></span></div>`).join('')}
+  ${list.length > 3 ? `<small>+ ${list.length - 3} more</small>` : ''}</div>`;
+}
 /* ---------- push notifications (work with the Admin page closed) ---------- */
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -354,6 +362,7 @@ function pushCard() {
 
 /* ---------- live updates: badge, title, sound ---------- */
 let knownIds = null, audioCtx = null;
+const justIn = new Set();   // orders that arrived while the panel was open: flash them until opened
 // browsers only allow sound after a tap, so the first tap anywhere unlocks the chime
 document.addEventListener('click', () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch {} });
 function beep() {
@@ -372,6 +381,7 @@ function beep() {
 function noteOrders(orders) {
   const fresh = knownIds ? orders.filter((o) => o.status === 'new' && !knownIds.has(o.id)) : [];
   knownIds = new Set(orders.map((o) => o.id));
+  fresh.forEach((o) => justIn.add(o.id));
   if (fresh.length) { beep(); flash(`🔔 ${fresh.length} new order${fresh.length === 1 ? '' : 's'}`); }
 }
 async function clearHandled() {
@@ -398,7 +408,7 @@ async function poll() {
   if (JSON.stringify(orders) === before) return;
   S.orders = orders;
   if (['today', 'logs', 'done', 'dashboard', 'orders', 'payments'].includes(tab)) draw();
-  else { document.querySelectorAll('.nb').forEach((b) => b.querySelector('.cnt')?.remove()); document.querySelectorAll('.nb').forEach((b) => b.insertAdjacentHTML('beforeend', tabCount(b.dataset.t))); syncAlerts(); }
+  else { const nbar = document.getElementById('newbar'); if (nbar) nbar.innerHTML = newBarHtml(); document.querySelectorAll('.nb').forEach((b) => b.querySelector('.cnt')?.remove()); document.querySelectorAll('.nb').forEach((b) => b.insertAdjacentHTML('beforeend', tabCount(b.dataset.t))); syncAlerts(); }
 }
 
 /* ---------- Orders ---------- */
