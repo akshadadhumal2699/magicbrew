@@ -8,7 +8,7 @@
 <div id="root"></div>
 <script>
 const R = document.getElementById('root');
-let token = localStorage.getItem('tok'), S = null, tab = 'dashboard', editing = null, offerEdit = null, qrData = null, xf = null;
+let token = localStorage.getItem('tok'), S = null, tab = 'today', editing = null, offerEdit = null, qrData = null, xf = null;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function api(url, opt = {}) {
   opt.headers = { ...(opt.headers || {}), Authorization: 'Bearer ' + token };
@@ -180,8 +180,11 @@ function renderPasswordLogin(err = '') {
 
 /* ---------- shell ---------- */
 const TABS = [
+  ['today', '🔔', "Today's Orders", 'New orders received today (IST). Tap Open to start one.'],
+  ['logs', '📋', 'Order Logs', 'Orders you opened, with status and history'],
+  ['done', '✅', 'Completed', 'Orders you have finished'],
   ['dashboard', '📊', 'Dashboard', 'How the café is doing'],
-  ['orders', '📦', 'Orders', 'Browse and manage orders by date'],
+  ['orders', '📦', 'All Orders', 'Browse and manage orders by date'],
   ['menu', '🍔', 'Menu', 'Items, prices and what customers can see'],
   ['offers', '🎁', 'Offers', 'Special prices shown to customers'],
   ['expenses', '💸', 'Expenses', 'Daily purchases and monthly bills'],
@@ -190,22 +193,24 @@ const TABS = [
   ['qr', '🔳', 'Café QR', 'Printable QR for your menu'],
   ['settings', '⚙️', 'Settings', 'Café details, WhatsApp and UPI'],
 ];
-const VIEWS = () => ({ dashboard, orders: ordersTab, menu, offers, expenses, payments, categories, qr, settings });
+const VIEWS = () => ({ today: todayTab, logs: logsTab, done: doneTab, dashboard, orders: ordersTab, menu, offers, expenses, payments, categories, qr, settings });
 async function refresh(quiet) {
   if (!token) return renderLogin();
   const sig = () => S && JSON.stringify([S.orders, S.expenses]);
   const before = sig();
   S = await api('/state');
+  noteOrders(S.orders);
   if (quiet && before === sig()) return;      // nothing new: don't disturb what the owner is doing
   draw();
 }
 function draw() {
-  const pend = S.orders.filter((o) => o.status === 'new').length, cur_ = TABS.find((t) => t[0] === tab);
+  const cur_ = TABS.find((t) => t[0] === tab);
   R.innerHTML = `<div class="app"><aside class="side"><div class="brand"><span class="logo">☕</span><div><b>${esc(S.settings.cafeName)}</b><small>Admin panel</small></div></div>
-  <nav class="nav">${TABS.map(([k, ic, l]) => `<button class="nb ${tab === k ? 'on' : ''}" data-act="tab" data-t="${k}"><span class="ic">${ic}</span>${l}${k === 'orders' && pend ? `<span class="cnt">${pend}</span>` : ''}</button>`).join('')}</nav>
+  <nav class="nav">${TABS.map(([k, ic, l]) => `<button class="nb ${k === 'today' ? 'hot' : ''} ${tab === k ? 'on' : ''}" data-act="tab" data-t="${k}"><span class="ic">${ic}</span>${l}${tabCount(k)}</button>`).join('')}</nav>
   <div class="spacer"></div><button class="logout" data-act="logout">Log out</button></aside>
   <main class="main"><div class="ph"><div><h1>${cur_[2]}</h1><p>${cur_[3]}</p></div><div id="ph-r"></div></div><div id="body">${VIEWS()[tab]()}</div></main></div>`;
   const hook = AFTER[tab]; if (hook) hook(document.getElementById('body'));
+  syncAlerts();
 }
 
 /* ---------- Dashboard ---------- */
@@ -223,8 +228,7 @@ function dashboard() {
   const m6 = mKeys.map((k) => stats(k + '-01', monthEnd(k)));
   const byCat = {}; S.expenses.filter((e) => e.date >= pa && e.date <= pb).forEach((e) => (byCat[e.category] = (byCat[e.category] || 0) + e.amount));
   const cats = Object.entries(byCat).sort((x, y) => y[1] - x[1]), catMax = cats[0] ? cats[0][1] : 1;
-  return `${!S.settings.ownerWhatsApp ? '<div class="alert">⚠️ Set your WhatsApp number in Settings to receive order notifications.</div>' : ''}
-  ${!S.settings.upiId && !S.settings.paymentQrImage ? '<div class="alert">⚠️ Add your UPI ID or payment QR in Settings so customers can pay.</div>' : ''}
+  return `${!S.settings.upiId && !S.settings.paymentQrImage ? '<div class="alert">⚠️ Add your UPI ID or payment QR in Settings so customers can pay.</div>' : ''}
   <div class="sec-t"><h2>Today · ${dlabel(t)}</h2></div>
   <div class="grid">${kpi('sales', '💰', "Today's Sales", money(td.sales), `${money(td.paid)} verified paid`)}${kpi('ord', '📦', "Today's Orders", td.orders, waiting ? `${waiting} new, waiting` : 'No orders waiting')}
   ${kpi('exp', '💸', "Today's Expenses", money(td.exp))}${profitKpi("Today's Profit", td.profit)}</div>
@@ -248,8 +252,102 @@ function dashboard() {
   ${S.orders.slice(0, 4).map(orderCard).join('') || '<div class="card empty"><span class="big">🧾</span>No orders yet.</div>'}`;
 }
 
+/* ---------- Today's Orders → Order Logs → Completed (days are Indian Standard Time) ---------- */
+const istDay = (iso) => new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+const istNow = () => istDay(new Date());
+const itime = (iso) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+const idt = (iso) => `${dlabel(istDay(iso))}, ${itime(iso)}`;
+const todayNew = () => S.orders.filter((o) => o.status === 'new' && istDay(o.createdAt) === istNow());
+const olderNew = () => S.orders.filter((o) => o.status === 'new' && istDay(o.createdAt) < istNow());
+const inLogs = () => S.orders.filter((o) => o.status === 'preparing' || o.status === 'ready');
+const tabCount = (k) => {
+  const n = k === 'today' ? todayNew().length : k === 'logs' ? inLogs().length : 0;
+  return n ? `<span class="cnt ${k === 'today' ? '' : 'soft'}">${n}</span>` : '';
+};
+const STATUS_LBL = { new: 'New', preparing: 'In progress', ready: 'Ready', completed: 'Completed', cancelled: 'Cancelled', 'payment-reported': 'Customer reported payment' };
+const payBadge = (o) => { const p = o.payment.status; return p === 'paid' ? '<span class="badge ok">Paid ✓</span>' : p === 'reported' ? '<span class="badge warn">Customer says paid · verify</span>' : '<span class="badge gray">Unpaid</span>'; };
+const itemsBox = (o) => `<div class="oc-items">${o.items.map((i) => `<div><span>${i.qty} × ${esc(i.name)}</span><span class="muted">${money(i.price * i.qty)}</span></div>`).join('')}</div>${o.notes ? `<div class="oc-note">📝 ${esc(o.notes)}</div>` : ''}`;
+// history falls back to what we know for orders placed before history was recorded
+const historyOf = (o) => o.history && o.history.length ? o.history : [{ status: 'new', at: o.createdAt }];
+
+function todayCard(o) {
+  const n = o.items.reduce((s, i) => s + i.qty, 0);
+  return `<div class="oc s-new fresh"><div class="oc-h"><div><b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${itime(o.createdAt)} · ${esc(o.customer.mobile)} · ${n} item${n === 1 ? '' : 's'}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  <div class="oc-sum">${o.items.map((i) => `${i.qty} × ${esc(i.name)}`).join(', ')}</div>
+  <button class="btn fill wide" data-act="open" data-id="${o.id}">Open order</button></div>`;
+}
+function logCard(o, live) {
+  const hist = historyOf(o).map((h) => `<li><b>${STATUS_LBL[h.status] || esc(h.status)}</b><span>${idt(h.at)}</span></li>`).join('');
+  return `<div class="oc s-${o.status}"><div class="oc-h"><div><b>#${pad(o.id)} · ${esc(o.customer.name)}</b><div class="oc-meta">${idt(o.createdAt)} · ${esc(o.customer.mobile)}</div></div><span class="oc-total">${money(o.total)}</span></div>
+  ${itemsBox(o)}
+  <ol class="hist">${hist}</ol>
+  <div class="oc-f"><div class="acts"><span class="badge ${STAT_CLS[o.status]}">${STATUS_LBL[o.status]}</span>${payBadge(o)}${o.payment.txnId ? `<small>Txn: ${esc(o.payment.txnId)}</small>` : ''}</div>
+  <div class="acts">${o.payment.status !== 'paid' ? `<button class="btn sm ok" data-act="pay" data-id="${o.id}">Mark paid</button>` : ''}
+  ${live ? `<button class="btn fill done-btn" data-act="os" data-id="${o.id}" data-s="completed">✓ Complete</button>` : ''}</div></div></div>`;
+}
+function todayTab() {
+  const list = todayNew().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)), old = olderNew().length;
+  return `${old ? `<div class="alert">⚠️ ${old} older order${old === 1 ? ' was' : 's were'} never opened. <button class="btn sm" data-act="tab" data-t="orders">See All Orders</button></div>` : ''}
+  <div class="sec-t"><h2>${dlabel(istNow())} · ${list.length} waiting</h2></div>
+  ${list.map(todayCard).join('') || '<div class="card empty"><span class="big">☕</span>No new orders right now.<br><small>This page updates by itself when a customer orders.</small></div>'}`;
+}
+function logsTab() {
+  const list = inLogs().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return list.map((o) => logCard(o, true)).join('') || '<div class="card empty"><span class="big">📋</span>Nothing in progress. Open an order from Today\'s Orders.</div>';
+}
+function doneTab() {
+  const list = S.orders.filter((o) => o.status === 'completed').sort((a, b) => {
+    const t = (o) => new Date(historyOf(o).filter((h) => h.status === 'completed').pop()?.at || o.createdAt);
+    return t(b) - t(a);
+  });
+  const days = {}; list.forEach((o) => (days[istDay(o.createdAt)] = days[istDay(o.createdAt)] || []).push(o));
+  return Object.keys(days).sort().reverse().map((d) => `<div class="day"><h3>${d === istNow() ? 'Today' : dlabel(d)} <small>· ${dlabel(d)}</small></h3><span>${days[d].length} order${days[d].length === 1 ? '' : 's'} · <b>${money(sum(days[d], (o) => o.total))}</b></span></div>${days[d].map((o) => logCard(o, false)).join('')}`).join('')
+    || '<div class="card empty"><span class="big">✅</span>No completed orders yet.</div>';
+}
+
+/* ---------- live updates: badge, title, sound ---------- */
+let knownIds = null, audioCtx = null;
+// browsers only allow sound after a tap, so the first tap anywhere unlocks the chime
+document.addEventListener('click', () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch {} });
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.22, 0.44].forEach((t) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime + t); g.gain.exponentialRampToValueAtTime(0.4, audioCtx.currentTime + t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + t + 0.18);
+      o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.2);
+    });
+  } catch {}
+  try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch {}
+}
+// ring + toast for orders we haven't seen before (not on the first load)
+function noteOrders(orders) {
+  const fresh = knownIds ? orders.filter((o) => o.status === 'new' && !knownIds.has(o.id)) : [];
+  knownIds = new Set(orders.map((o) => o.id));
+  if (fresh.length) { beep(); flash(`🔔 ${fresh.length} new order${fresh.length === 1 ? '' : 's'}`); }
+}
+function syncAlerts() {
+  const n = S ? todayNew().length : 0;
+  document.title = (n ? `(${n}) ` : '') + 'Magic Brew · Admin';
+  try { n ? navigator.setAppBadge && navigator.setAppBadge(n) : navigator.clearAppBadge && navigator.clearAppBadge(); } catch {}
+}
+// fetch just the orders; repaint only when they changed and the chef is on an order screen
+async function poll() {
+  if (!token || !S) return;
+  const before = JSON.stringify(S.orders);
+  const d = await fetch('/api/admin/orders-feed', { headers: { Authorization: 'Bearer ' + token } });
+  if (d.status === 401) return;
+  const { orders } = await d.json();
+  noteOrders(orders);
+  if (JSON.stringify(orders) === before) return;
+  S.orders = orders;
+  if (['today', 'logs', 'done', 'dashboard', 'orders', 'payments'].includes(tab)) draw();
+  else { document.querySelectorAll('.nb').forEach((b) => b.querySelector('.cnt')?.remove()); document.querySelectorAll('.nb').forEach((b) => b.insertAdjacentHTML('beforeend', tabCount(b.dataset.t))); syncAlerts(); }
+}
+
 /* ---------- Orders ---------- */
-const STAT = ['new', 'preparing', 'ready', 'completed', 'cancelled'];
+const STAT =['new', 'preparing', 'ready', 'completed', 'cancelled'];
 const NEXT = { new: ['preparing', 'Start preparing'], preparing: ['ready', 'Mark ready'], ready: ['completed', 'Complete'] };
 const STAT_CLS = { new: 'warn', preparing: 'info', ready: 'ok', completed: 'gray', cancelled: 'bad' };
 function orderCard(o) {
@@ -429,8 +527,8 @@ function settings() {
   const s = S.settings;
   return `<div class="card"><label>Café name</label><input id="s-cafeName" value="${esc(s.cafeName)}"><label>Tagline</label><input id="s-tagline" value="${esc(s.tagline)}">
   <label>Public menu URL (for the QR code, e.g. https://menu.magicbrew.in)</label><input id="s-publicUrl" value="${esc(s.publicUrl)}"></div>
-  <div class="card"><h3>WhatsApp notifications</h3><label>Owner/chef WhatsApp number (with country code, e.g. 919876543210)</label><input id="s-ownerWhatsApp" value="${esc(s.ownerWhatsApp)}" inputmode="numeric">
-  <small>${S.whatsappApi ? '✅ WhatsApp Cloud API is configured — messages are sent automatically.' : 'Cloud API not configured: customers get a “Send on WhatsApp” button that opens a pre-filled message to this number. See README to enable fully automatic sending.'}</small></div>
+  <div class="card"><h3>WhatsApp (optional)</h3><label>Owner/chef WhatsApp number (with country code, e.g. 919876543210)</label><input id="s-ownerWhatsApp" value="${esc(s.ownerWhatsApp)}" inputmode="numeric">
+  <small>Orders now arrive in “Today's Orders” and don't need WhatsApp. ${S.whatsappApi ? 'The WhatsApp Cloud API is configured, so a copy is also sent there.' : 'Only used if the WhatsApp Cloud API is set up on the server.'}</small></div>
   <div class="card"><h3>Payment</h3><label>UPI ID (e.g. magicbrew@okhdfc)</label><input id="s-upiId" value="${esc(s.upiId)}"><label>Payee name</label><input id="s-upiName" value="${esc(s.upiName)}">
   <small>A QR with the exact bill amount is generated per order from your UPI ID.</small>
   <label>Or upload your own bank/UPI QR image (overrides the generated QR)</label><input type="file" id="s-qr" accept="image/*">
@@ -457,7 +555,9 @@ const ACT = {
     f.p = p; f.month = ''; draw();
   },
   // orders
-  os: (el) => putOrder(el.dataset.id, { status: el.dataset.s }),
+  os: async (el) => { await putOrder(el.dataset.id, { status: el.dataset.s }); if (el.dataset.s === 'completed') flash('Moved to Completed ✓'); },
+  // opening a new order moves it from Today's Orders to Order Logs
+  open: async (el) => { await api('/orders/' + el.dataset.id, { method: 'PUT', json: { status: 'preparing' } }); tab = 'logs'; window.scrollTo(0, 0); flash('Moved to Order Logs'); await refresh(); },
   pay: (el) => putOrder(el.dataset.id, { paymentStatus: 'paid' }),
   clearorders: async () => {
     const n = S.orders.length;
@@ -572,6 +672,7 @@ document.addEventListener('input', (e) => {
   }
   refresh();
 })();
-// live order updates (only repaints when orders/expenses actually changed)
-setInterval(() => { if (token && ['dashboard', 'orders', 'payments'].includes(tab)) refresh(true).catch(() => {}); }, 15000);
+// live order updates every 5s (only repaints when orders actually changed); also catch up when the app is reopened
+setInterval(() => { if (!document.hidden) poll().catch(() => {}); }, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll().catch(() => {}); });
 </script></body></html>

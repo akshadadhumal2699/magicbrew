@@ -293,11 +293,12 @@ app.post('/api/orders', async (req, res) => {
     status: 'new', payment: { status: 'unpaid', txnId: '' },
     createdAt: new Date().toISOString(),
   };
+  order.history = [{ status: 'new', at: order.createdAt }];
   db.orders.unshift(order);
   save();
-  const text = orderText(order, db.settings, orderLink(req, order));
-  const sent = await sendWhatsApp(text);
-  res.json({ order, whatsappSent: sent, whatsappLink: db.settings.ownerWhatsApp ? waLink(text) : null });
+  // The order lands in the Admin panel (Today's Orders). The WhatsApp Cloud API copy is optional and never needed.
+  await sendWhatsApp(orderText(order, db.settings, orderLink(req, order)));
+  res.json({ order });
 });
 
 app.get('/api/orders/:id', (req, res) => {
@@ -324,10 +325,10 @@ app.post('/api/orders/:id/payment', async (req, res) => {
   if (!o) return res.status(404).json({ error: 'Order not found' });
   if (o.payment.status === 'paid') return res.json({ order: o });
   o.payment = { status: 'reported', txnId: String(req.body.txnId || '').trim().slice(0, 40), reportedAt: new Date().toISOString() };
+  (o.history = o.history || []).push({ status: 'payment-reported', at: o.payment.reportedAt });
   save();
-  const text = paymentText(o, db.settings, o.token && orderLink(req, o));
-  const sent = await sendWhatsApp(text);
-  res.json({ order: o, whatsappSent: sent, whatsappLink: db.settings.ownerWhatsApp ? waLink(text) : null });
+  await sendWhatsApp(paymentText(o, db.settings, o.token && orderLink(req, o)));
+  res.json({ order: o });
 });
 
 // ---------- admin API ----------
@@ -468,10 +469,19 @@ admin.put('/expenses/:id', (req, res) => {
 });
 admin.delete('/expenses/:id', (req, res) => { db.expenses = db.expenses.filter((e) => e.id !== req.params.id); save(); res.json({ ok: true }); });
 
+// Lightweight feed the Admin panel polls every few seconds: orders + how many are waiting today (IST).
+const istDay = (iso) => new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+admin.get('/orders-feed', (req, res) => {
+  const t = todayIST();
+  res.json({ orders: db.orders, pending: db.orders.filter((o) => o.status === 'new' && istDay(o.createdAt) === t).length });
+});
 admin.put('/orders/:id', (req, res) => {
   const o = db.orders.find((x) => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
-  if (['new', 'preparing', 'ready', 'completed', 'cancelled'].includes(req.body.status)) o.status = req.body.status;
+  if (['new', 'preparing', 'ready', 'completed', 'cancelled'].includes(req.body.status) && req.body.status !== o.status) {
+    o.status = req.body.status;
+    (o.history = o.history || []).push({ status: o.status, at: new Date().toISOString() });
+  }
   if (req.body.paymentStatus === 'paid') { o.payment.status = 'paid'; o.payment.confirmedAt = new Date().toISOString(); }
   if (req.body.paymentStatus === 'unpaid') o.payment = { status: 'unpaid', txnId: '' };
   save(); res.json(o);

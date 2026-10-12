@@ -22,6 +22,13 @@ small{color:var(--muted)}
 .nb:hover{background:#ffffff12}
 .nb.on{background:var(--gold);color:var(--brand2);font-weight:600}
 .nb .cnt{margin-left:auto;background:var(--bad);color:#fff;border-radius:99px;font-size:.7rem;padding:1px 8px;font-weight:600}
+.nb .cnt.soft{background:#ffffff30;color:#fff}
+.nb.on .cnt.soft{background:var(--brand2);color:var(--gold)}
+/* Today's Orders stands out so the chef can always find it */
+.nb.hot{background:linear-gradient(135deg,#e9b44c,#d9a441);color:var(--brand2);font-weight:700;box-shadow:0 0 0 2px #ffffff40 inset}
+.nb.hot.on{background:#fff;color:var(--brand2);box-shadow:0 0 0 2px var(--gold)}
+.nb.hot .cnt{background:var(--bad);color:#fff;font-size:.8rem;padding:2px 9px;animation:pulse 1.6s infinite}
+@keyframes pulse{50%{transform:scale(1.15)}}
 .side .spacer{flex:1}
 .logout{border:1px solid #ffffff30;background:none;color:#e6d4b8;padding:9px;border-radius:12px;margin-top:10px}
 .logout:hover{background:#ffffff12}
@@ -125,6 +132,14 @@ input[type=checkbox],input[type=radio]{width:auto;accent-color:var(--brand)}
 .oc-note{font-size:.82rem;color:var(--warn);margin-bottom:8px}
 .oc-f{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
 .oc-f select{width:auto;padding:5px 8px;font-size:.78rem;border-radius:8px}
+
+.oc.fresh{border-left-width:6px;background:#fffaf0}
+.oc-sum{color:var(--muted);font-size:.86rem;margin:8px 0 12px}
+.hist{list-style:none;margin:0 0 10px;padding:0 0 0 14px;border-left:2px solid var(--line);font-size:.8rem;display:flex;flex-direction:column;gap:3px}
+.hist li{display:flex;justify-content:space-between;gap:10px}
+.hist span{color:var(--muted)}
+.done-btn{background:var(--ok);border-color:var(--ok);padding:10px 20px;font-size:.95rem}
+.done-btn:hover{background:#25724a}
 
 /* menu admin */
 .cat-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:22px 0 8px}
